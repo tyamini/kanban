@@ -16,6 +16,7 @@ export interface CorsGateInput {
 	method: string | undefined;
 	originHeader: string | undefined;
 	allowedOrigin: string;
+	additionalAllowedOrigins?: ReadonlySet<string>;
 }
 
 const isDev = process.env.NODE_ENV === "development";
@@ -29,8 +30,9 @@ export function evaluateCors(input: CorsGateInput): CorsDecision {
 	}
 
 	const isDevServer = isDev && (origin === "http://localhost:4173" || origin === "http://127.0.0.1:4173");
+	const isConfiguredOrigin = input.additionalAllowedOrigins?.has(origin) ?? false;
 
-	if (origin !== input.allowedOrigin && !isDevServer) {
+	if (origin !== input.allowedOrigin && !isConfiguredOrigin && !isDevServer) {
 		return { kind: "reject", origin };
 	}
 
@@ -60,6 +62,32 @@ export function evaluateHost(input: HostGateInput): HostDecision {
 	return { kind: "allow" };
 }
 
+function parseConfiguredAllowedHostPorts(): string[] {
+	const raw = process.env.KANBAN_ALLOWED_HOSTS?.trim();
+	if (!raw) {
+		return [];
+	}
+	const port = getKanbanRuntimePort();
+	const result: string[] = [];
+	for (const part of raw.split(",")) {
+		const host = part.trim().toLowerCase();
+		if (!host) {
+			continue;
+		}
+		result.push(host.includes(":") ? host : `${host}:${port}`);
+	}
+	return result;
+}
+
+function getConfiguredAllowedOrigins(): ReadonlySet<string> {
+	const scheme = getKanbanRuntimeOrigin().split("://", 1)[0];
+	const origins = new Set<string>();
+	for (const hostPort of parseConfiguredAllowedHostPorts()) {
+		origins.add(`${scheme}://${hostPort}`);
+	}
+	return origins;
+}
+
 export function getAllowedHostHeaders(): ReadonlySet<string> {
 	const port = getKanbanRuntimePort();
 	const boundHost = getKanbanRuntimeHost().toLowerCase();
@@ -68,13 +96,20 @@ export function getAllowedHostHeaders(): ReadonlySet<string> {
 		allowed.add(`${host}:${port}`);
 	};
 
+	for (const hostPort of parseConfiguredAllowedHostPorts()) {
+		allowed.add(hostPort);
+	}
+
+	// Always allow loopback so local CLI subcommands and the port probe keep
+	// working even when the server is bound to a remote interface.
+	addHostPort("localhost");
+	addHostPort("127.0.0.1");
+
 	if (isKanbanRemoteHost()) {
 		addHostPort(boundHost);
 		return allowed;
 	}
 
-	addHostPort("localhost");
-	addHostPort("127.0.0.1");
 	if (isDev) {
 		// Vite's default dev server host:port
 		allowed.add("localhost:4173");
@@ -121,6 +156,7 @@ export function handleHttpRequest(req: IncomingMessage, res: ServerResponse): { 
 		method: req.method,
 		originHeader: req.headers.origin,
 		allowedOrigin: getKanbanRuntimeOrigin(),
+		additionalAllowedOrigins: getConfiguredAllowedOrigins(),
 	});
 
 	switch (corsDecision.kind) {
@@ -158,6 +194,7 @@ export function handleSocketUpgrade(request: IncomingMessage, socket: Duplex): {
 		method: request.method,
 		originHeader: request.headers.origin,
 		allowedOrigin: getKanbanRuntimeOrigin(),
+		additionalAllowedOrigins: getConfiguredAllowedOrigins(),
 	});
 	if (corsDecision.kind === "reject") {
 		return rejectSocket(socket);
