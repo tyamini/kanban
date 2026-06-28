@@ -14,29 +14,55 @@ the LAN. Background and rationale for the local changes live in
 - Node 22+: `nvm use 22` (this fork is built/run on Node 22).
 - A git repo to open as the board (default `~/hello-kanban`).
 
-## 1. Build (only after a clone or code change)
+## TL;DR — one command does the right thing
 
 ```bash
-nvm use 22
-npm install
-npm --prefix web-ui install
-npm run build
+scripts/serve-kanban.sh            # = deploy (default)
 ```
 
-Do **not** set `POSTHOG_KEY`, `OTEL_*`, or `SENTRY_AUTH_TOKEN` — building without
-them keeps the bundle telemetry-free. Verify:
+`deploy` is **state-aware** — run it any time (fresh clone, after `git pull`,
+after editing code, or when the server is already up) and it does only what's
+needed:
+
+```
+        ┌─ deps missing? ───────────────► npm install (root + web-ui)
+deploy ─┤
+        ├─ rebuild needed? ─────────────► npm run build      (else skip)
+        │     (dist/cli.js missing, or any source/build input newer than it)
+        │
+        └─ then decide the server:
+              • not running              ► start (detached)
+              • running + just rebuilt    ► restart (pick up new build)
+              • running + build unchanged ► nothing to do
+```
+
+So: **already deployed and up to date → no-op. Code changed → rebuild + restart.
+Only the server is down → just start.** No need to decide manually.
+
+Builds never set `POSTHOG_KEY`, `OTEL_*`, or `SENTRY_AUTH_TOKEN`, keeping the
+bundle telemetry-free. Verify a build:
 
 ```bash
 rg -c "ingest\..*sentry\.io|data\.cline\.bot" dist/cli.js dist/web-ui/assets/*.js || echo "clean: no telemetry endpoints"
 ```
 
-## 2. Deploy / manage
+## Actions / manual control
 
-Use the repo script (no global install, survives logout via `setsid`+`nohup`):
+The repo script needs no global install and survives logout (`setsid`+`nohup`):
 
 ```bash
-scripts/serve-kanban.sh start      # or: restart | stop | status
+scripts/serve-kanban.sh deploy     # default: smart build-if-needed + (re)start-if-needed
+scripts/serve-kanban.sh status     # running? + whether the build is up to date / stale / missing
+scripts/serve-kanban.sh build      # force a build (installs deps first if missing)
+scripts/serve-kanban.sh start      # (re)start from the current dist/
+scripts/serve-kanban.sh restart    # same as start (stops any existing first)
+scripts/serve-kanban.sh stop       # stop the server
 ```
+
+How "rebuild needed" is decided: no `dist/cli.js`, or any of `src/`,
+`web-ui/src/`, `package.json`, `web-ui/package.json`, `scripts/build.mjs`,
+`web-ui/vite.config.ts`, or the `tsconfig*.json` files is newer than the built
+`dist/cli.js` (so edits and `git pull`/`merge`/`checkout` all trigger a rebuild).
 
 Defaults: binds `0.0.0.0:3484`, `--no-passcode`, allows hosts
 `tyamini-dev,10.10.73.144`, logs to `/tmp/kanban-server.log`.

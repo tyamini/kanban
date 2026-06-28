@@ -65,14 +65,14 @@ upstream independently.
 Prerequisites: Node 22+ (`nvm use 22`).
 
 ```bash
-npm install
-npm --prefix web-ui install
-npm run build                 # produces dist/ (telemetry-free; no keys baked in)
-scripts/serve-kanban.sh start # serve detached on the LAN, no passcode
+scripts/serve-kanban.sh        # state-aware: installs/builds only if needed, then (re)starts only if needed
 ```
 
-See the **deploy-server** skill (`.claude/skills/deploy-server/SKILL.md`) for the
-full runbook, environment knobs, and verification steps.
+This one command handles a fresh clone, a post-`git pull` rebuild, or an
+already-running up-to-date server (no-op). See the **deploy-server** skill
+(`.claude/skills/deploy-server/SKILL.md`) for the decision logic, individual
+actions (`build`/`start`/`stop`/`restart`/`status`), environment knobs, and
+verification steps.
 
 ## Security note
 
