@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/node";
 import packageJson from "../../package.json" with { type: "json" };
 
-const nodeSentryDsn = "https://b597cbea54f43704439be10d843699b0@o4511098366263296.ingest.us.sentry.io/4511098558087168";
+const nodeSentryDsn = "";
 
 const appVersion = typeof packageJson.version === "string" ? packageJson.version : "0.1.0";
 
