@@ -1,3 +1,5 @@
+import "@/utils/crypto-random-uuid-polyfill";
+
 import ReactDOM from "react-dom/client";
 import { Toaster } from "sonner";
 
