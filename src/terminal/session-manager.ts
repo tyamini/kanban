@@ -22,6 +22,7 @@ import {
 	WORKSPACE_TRUST_CONFIRM_DELAY_MS,
 } from "./claude-workspace-trust";
 import { hasCodexWorkspaceTrustPrompt, shouldAutoConfirmCodexWorkspaceTrust } from "./codex-workspace-trust";
+import { hasCursorWorkspaceTrustPrompt, shouldAutoConfirmCursorWorkspaceTrust } from "./cursor-workspace-trust";
 import { stripAnsi } from "./output-utils";
 import { PtySession } from "./pty-session";
 import { reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
@@ -384,7 +385,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 						if (!entry.active.autoConfirmedWorkspaceTrust && entry.active.workspaceTrustConfirmTimer === null) {
 							const hasClaudePrompt = hasClaudeWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
 							const hasCodexPrompt = hasCodexWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
-							if (hasClaudePrompt || hasCodexPrompt) {
+							const hasCursorPrompt = hasCursorWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
+							if (hasClaudePrompt || hasCodexPrompt || hasCursorPrompt) {
 								entry.active.autoConfirmedWorkspaceTrust = true;
 								const trustConfirmDelayMs = WORKSPACE_TRUST_CONFIRM_DELAY_MS;
 								entry.active.workspaceTrustConfirmTimer = setTimeout(() => {
@@ -509,6 +511,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			workspaceTrustBuffer:
 				shouldAutoConfirmClaudeWorkspaceTrust(request.agentId, request.cwd) ||
 				shouldAutoConfirmCodexWorkspaceTrust(request.agentId, request.cwd) ||
+				shouldAutoConfirmCursorWorkspaceTrust(request.agentId, request.cwd) ||
 				hasCodexLaunchSignature
 					? ""
 					: null,

@@ -1427,6 +1427,150 @@ const clineAdapter: AgentSessionAdapter = {
 	},
 };
 
+// Cursor loads hooks only from fixed locations (~/.cursor/hooks.json or
+// <project>/.cursor/hooks.json) with no flag to point at an out-of-tree file.
+// We use the user-level file and a guard script that no-ops unless the process
+// carries KANBAN_HOOK_TASK_ID, so manual `cursor-agent` use is unaffected and
+// parallel Kanban tasks are routed correctly by env. Verified events that fire
+// in CLI mode: sessionStart/preToolUse/postToolUse/afterFileEdit/sessionEnd
+// (plus `stop` at turn-end in interactive sessions).
+const CURSOR_HOOK_EVENT_MAP: ReadonlyArray<readonly [string, RuntimeHookEvent]> = [
+	["stop", "to_review"],
+	["sessionEnd", "to_review"],
+	["sessionStart", "to_in_progress"],
+	["preToolUse", "to_in_progress"],
+	["postToolUse", "to_in_progress"],
+	["afterFileEdit", "activity"],
+];
+
+function buildCursorHookScriptContent(notifyCommand: string): string {
+	return `#!/usr/bin/env bash
+# Kanban <-> Cursor hook bridge. No-ops outside a Kanban-managed session.
+EVENT="\${1:-activity}"
+cat >/dev/null 2>&1 || true
+if [ -n "\${KANBAN_HOOK_TASK_ID:-}" ]; then
+  ${notifyCommand} --event "$EVENT" --source cursor >/dev/null 2>&1 || true
+fi
+printf '{}'
+exit 0
+`;
+}
+
+interface CursorHookEntry {
+	command?: string;
+	[key: string]: unknown;
+}
+
+interface CursorHooksConfig {
+	version?: number;
+	hooks?: Record<string, CursorHookEntry[]>;
+}
+
+async function mergeCursorHooksConfig(configPath: string, scriptPath: string): Promise<void> {
+	let config: CursorHooksConfig = { version: 1, hooks: {} };
+	try {
+		const parsed = JSON.parse(await readFile(configPath, "utf8")) as CursorHooksConfig;
+		if (parsed && typeof parsed === "object") {
+			config = parsed;
+		}
+	} catch {
+		// No existing config (or unreadable) -> start fresh.
+	}
+	if (typeof config.version !== "number") {
+		config.version = 1;
+	}
+	if (!config.hooks || typeof config.hooks !== "object") {
+		config.hooks = {};
+	}
+
+	for (const [cursorEvent, kanbanEvent] of CURSOR_HOOK_EVENT_MAP) {
+		const command = `${scriptPath} ${kanbanEvent}`;
+		const existing = Array.isArray(config.hooks[cursorEvent]) ? config.hooks[cursorEvent] : [];
+		if (!existing.some((entry) => entry?.command === command)) {
+			existing.push({ command });
+		}
+		config.hooks[cursorEvent] = existing;
+	}
+
+	await ensureTextFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+// Cursor's interactive "Clarifying Questions" picker is a mid-turn pause: it
+// fires no `stop`/`sessionEnd`/`afterAgentResponse` hook, so hooks alone can't
+// flag it for review. Like the Codex adapter, we complement hooks with a PTY
+// output detector. We normalize to letters-only so the match survives the TUI
+// interleaving cursor-positioning escapes between characters of the header.
+function createCursorClarifyingQuestionDetector(): AgentOutputTransitionDetector {
+	const MAX_BUFFER_CHARS = 8_000;
+	let normalizedBuffer = "";
+	return (data, summary) => {
+		if (summary.state !== "running") {
+			return null;
+		}
+		normalizedBuffer += stripAnsi(data)
+			.toLowerCase()
+			.replace(/[^a-z]/gu, "");
+		if (normalizedBuffer.length > MAX_BUFFER_CHARS) {
+			normalizedBuffer = normalizedBuffer.slice(-MAX_BUFFER_CHARS);
+		}
+		if (normalizedBuffer.includes("clarifyingquestions")) {
+			normalizedBuffer = "";
+			return { type: "hook.to_review" };
+		}
+		return null;
+	};
+}
+
+function shouldInspectCursorOutputForTransition(summary: RuntimeTaskSessionSummary): boolean {
+	return summary.state === "running";
+}
+
+const cursorAdapter: AgentSessionAdapter = {
+	async prepare(input) {
+		const args = [...input.args];
+		const env: Record<string, string | undefined> = {};
+
+		if (input.autonomousModeEnabled && !input.startInPlanMode && !hasCliOption(args, "--force")) {
+			args.push("--force");
+		}
+
+		if (input.startInPlanMode && !hasCliOption(args, "--plan") && !hasCliOption(args, "--mode")) {
+			args.push("--plan");
+		}
+
+		if (input.resumeFromTrash && !hasCliOption(args, "--continue") && !hasCliOption(args, "--resume")) {
+			args.push("--continue");
+		}
+
+		const hooks = resolveHookContext(input);
+		if (hooks) {
+			const cursorDir = join(homedir(), ".cursor");
+			const scriptPath = join(cursorDir, "hooks", "kanban-cursor-hook.sh");
+			const notifyCommand = buildKanbanCommandParts(["hooks", "notify"]).map(quoteShellArg).join(" ");
+			await ensureTextFile(scriptPath, buildCursorHookScriptContent(notifyCommand), process.platform !== "win32");
+			await mergeCursorHooksConfig(join(cursorDir, "hooks.json"), scriptPath);
+			Object.assign(
+				env,
+				createHookRuntimeEnv({
+					taskId: hooks.taskId,
+					workspaceId: hooks.workspaceId,
+				}),
+			);
+		}
+
+		const withPromptLaunch = withPrompt(args, input.prompt, "append");
+		return {
+			...withPromptLaunch,
+			env: {
+				...withPromptLaunch.env,
+				...env,
+			},
+			detectOutputTransition: createCursorClarifyingQuestionDetector(),
+			shouldInspectOutputForTransition: shouldInspectCursorOutputForTransition,
+		};
+	},
+};
+
 const ADAPTERS: Record<RuntimeAgentId, AgentSessionAdapter> = {
 	claude: claudeAdapter,
 	codex: codexAdapter,
@@ -1435,6 +1579,7 @@ const ADAPTERS: Record<RuntimeAgentId, AgentSessionAdapter> = {
 	droid: droidAdapter,
 	kiro: kiroAdapter,
 	cline: clineAdapter,
+	cursor: cursorAdapter,
 };
 
 export async function prepareAgentLaunch(input: AgentAdapterLaunchInput): Promise<PreparedAgentLaunch> {
