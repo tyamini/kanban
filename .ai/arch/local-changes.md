@@ -103,6 +103,45 @@ upstream independently.
    the handoff. Design notes and deferred work (structured handoff block, AND-gating,
    manual-start injection, CLI parity) live in `.plan/docs/linked-task-handoff-plan.md`.
 
+8. **Reviewable Done tasks (open transcript + re-prompt; deferred teardown)** —
+   `src/core/api-contract.ts`, `src/trpc/runtime-api.ts`,
+   `web-ui/src/hooks/use-task-sessions.ts`,
+   `web-ui/src/hooks/use-linked-backlog-task-actions.ts`,
+   `web-ui/src/hooks/use-board-interactions.ts`,
+   `web-ui/src/components/board-card.tsx`,
+   `web-ui/src/components/card-detail-view.tsx`,
+   `web-ui/src/components/detail-panels/cline-agent-chat-panel.tsx`,
+   `web-ui/src/components/detail-panels/done-task-reprompt-composer.tsx`,
+   `web-ui/src/App.tsx`
+   Makes the `trash`/"Done" column a reviewable, resumable state instead of an
+   immediate destroy. Three coupled changes:
+   - **Deferred teardown.** `performMoveTaskToTrash` no longer deletes the worktree
+     or stops the agent on move-to-Done — it only closes the per-task detail shell.
+     The agent session + worktree stay alive so a Done task can be reopened. The
+     real discard (agent stop + `deleteWorktree`) happens only at clear-trash
+     (`handleConfirmClearTrash`, unchanged), which is now the single teardown point.
+   - **Openable Done + transcript.** `handleCardSelect` no longer bails on `trash`
+     and `board-card.tsx` makes Done cards clickable/hoverable (dependency-linking
+     stays disabled via the separate `isCardOpenable` flag). The detail view enables
+     the terminal for `trash` (`isTaskTerminalEnabled`) so CLI/PTY agents show their
+     live terminal transcript, and renders `ClineAgentChatPanel` in a new `readOnly`
+     mode (composer + action footer hidden) so the native Cline agent shows its
+     persisted chat transcript.
+   - **Re-prompt back to In Progress.** `DoneTaskRepromptComposer` (shown under the
+     read-only transcript) submits a prompt to `resumeDoneTaskWithPrompt`, which
+     moves the card `trash → in_progress`, reuses the existing worktree, and resumes
+     the agent *continuing the same conversation* with the new prompt. This rides a
+     new `resumeFromPersistence` flag threaded `api-contract` → `runtime-api` →
+     `use-task-sessions`: for Cline it hydrates persisted history and runs the prompt
+     as the next turn; for CLI/PTY agents it also adds the agent's `--continue`/
+     `resume` flag. Lost dependency links (dropped when the task entered Done) stay
+     lost, by design.
+   Caveat: CLI/PTY agents (claude/codex/…) have no server-side transcript store, so
+   their Done transcript is the live terminal — visible within the browser session,
+   but not replayed after a full page reload (no server-side buffer). The native
+   Cline agent persists the full transcript and survives reloads. Server-side
+   terminal-output logging for CLI agents is deferred follow-up work.
+
 ## Build & deploy
 
 Prerequisites: Node 22+ (`nvm use 22`).

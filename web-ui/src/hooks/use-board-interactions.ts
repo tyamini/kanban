@@ -85,6 +85,7 @@ export interface UseBoardInteractionsResult {
 	handleMoveToTrash: () => void;
 	handleMoveReviewCardToTrash: (taskId: string) => void;
 	handleRestoreTaskFromTrash: (taskId: string) => void;
+	resumeDoneTaskWithPrompt: (taskId: string, prompt: string) => Promise<void>;
 	handleCancelAutomaticTaskAction: (taskId: string) => void;
 	handleOpenClearTrash: () => void;
 	handleConfirmClearTrash: () => void;
@@ -609,6 +610,66 @@ export function useBoardInteractions({
 		[ensureTaskWorkspace, setBoard, startTaskSession],
 	);
 
+	// Re-prompt a Done (`trash`) task: move it back to In Progress and resume the
+	// agent, continuing the existing conversation with the new prompt. The
+	// dependency links were already discarded when the task was moved to Done.
+	const resumeDoneTaskWithPrompt = useCallback(
+		async (taskId: string, prompt: string): Promise<void> => {
+			const trimmedPrompt = prompt.trim();
+			if (!trimmedPrompt) {
+				return;
+			}
+			const selection = findCardSelection(board, taskId);
+			if (!selection || selection.column.id !== "trash") {
+				return;
+			}
+			const task = selection.card;
+
+			const moved = moveTaskToColumn(board, taskId, "in_progress", { insertAtTop: true });
+			if (!moved.moved) {
+				return;
+			}
+			setBoard(moved.board);
+			setSelectedTaskId(taskId);
+
+			const revertToTrash = () => {
+				setBoard((currentBoard) => {
+					const currentColumnId = getTaskColumnId(currentBoard, taskId);
+					if (currentColumnId !== "in_progress") {
+						return currentBoard;
+					}
+					const reverted = moveTaskToColumn(currentBoard, taskId, "trash", { insertAtTop: true });
+					return reverted.moved ? reverted.board : currentBoard;
+				});
+			};
+
+			const ensured = await ensureTaskWorkspace(task);
+			if (!ensured.ok) {
+				notifyError(ensured.message ?? "Could not set up task workspace.");
+				revertToTrash();
+				return;
+			}
+			if (ensured.response?.warning) {
+				showAppToast({
+					intent: "warning",
+					icon: "warning-sign",
+					message: ensured.response.warning,
+					timeout: 7000,
+				});
+			}
+
+			const started = await startTaskSession(task, {
+				resumeFromPersistence: true,
+				promptOverride: trimmedPrompt,
+			});
+			if (!started.ok) {
+				notifyError(started.message ?? "Could not resume task session.");
+				revertToTrash();
+			}
+		},
+		[board, ensureTaskWorkspace, setBoard, setSelectedTaskId, startTaskSession],
+	);
+
 	const handleDragEnd = useCallback(
 		(result: DropResult, options?: { selectDroppedTask?: boolean }) => {
 			if (options?.selectDroppedTask && result.type.startsWith("CARD") && result.destination) {
@@ -759,7 +820,9 @@ export function useBoardInteractions({
 	const handleCardSelect = useCallback(
 		(taskId: string) => {
 			const selection = findCardSelection(board, taskId);
-			if (!selection || selection.column.id === "trash") {
+			// Done (`trash`) tasks are openable too, so the user can review the
+			// transcript and re-prompt the task back into progress.
+			if (!selection) {
 				return;
 			}
 			setSelectedTaskId(taskId);
@@ -918,6 +981,7 @@ export function useBoardInteractions({
 		handleMoveToTrash,
 		handleMoveReviewCardToTrash,
 		handleRestoreTaskFromTrash,
+		resumeDoneTaskWithPrompt,
 		handleCancelAutomaticTaskAction,
 		handleOpenClearTrash,
 		handleConfirmClearTrash,

@@ -209,8 +209,12 @@ export function useLinkedBacklogTaskActions({
 				}
 			}
 
-			await Promise.all([stopTaskSession(task.id), stopTaskSession(getDetailTerminalTaskId(task.id))]);
-			await cleanupTaskWorkspace(task.id);
+			// Keep the agent session AND the git worktree alive so a Done task can be
+			// reopened, its transcript viewed (live terminal for CLI agents / persisted
+			// chat for Cline), and re-prompted back into progress. Only the per-task
+			// detail shell is closed here. The actual discard (agent stop + worktree
+			// deletion) is deferred to clear-trash.
+			await stopTaskSession(getDetailTerminalTaskId(task.id));
 		},
 		[
 			cleanupTaskWorkspace,

@@ -196,13 +196,13 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 				//   if the user changes the model on the card, the next session launch
 				//   (including trash-restore) uses the updated values.
 				const terminalManager = await deps.getScopedTerminalManager(workspaceScope);
-				const previousTerminalAgentId = body.resumeFromTrash
+				const isResume = Boolean(body.resumeFromTrash || body.resumeFromPersistence);
+				const previousTerminalAgentId = isResume
 					? (terminalManager.getSummary(body.taskId)?.agentId ?? null)
 					: null;
 				const effectiveAgentId = previousTerminalAgentId ?? body.agentId ?? scopedRuntimeConfig.selectedAgentId;
 				let useClinePath = effectiveAgentId === "cline";
-				const shouldProbePersistedClineSession =
-					body.resumeFromTrash && !useClinePath && previousTerminalAgentId === null;
+				const shouldProbePersistedClineSession = isResume && !useClinePath && previousTerminalAgentId === null;
 				if (shouldProbePersistedClineSession) {
 					// If the terminal summary already has a concrete non-Cline agentId,
 					// skip Cline persisted-session probing. That probe can cold-start the
@@ -236,6 +236,7 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 						taskTitle: resolvedClineTitle.length > 0 ? resolvedClineTitle : undefined,
 						images: body.images,
 						resumeFromTrash: body.resumeFromTrash,
+						resumeFromPersistence: body.resumeFromPersistence,
 						providerId: clineLaunchConfig.providerId,
 						modelId: clineLaunchConfig.modelId,
 						mode: requestedClineTaskMode,
@@ -288,7 +289,9 @@ export function createRuntimeApi(deps: CreateRuntimeApiDependencies): RuntimeTrp
 					prompt: body.prompt,
 					images: body.images,
 					startInPlanMode: body.startInPlanMode,
-					resumeFromTrash: body.resumeFromTrash,
+					// Both trash-restore and Done re-prompt should add the agent's
+					// continue/resume CLI flag so the conversation carries over.
+					resumeFromTrash: body.resumeFromTrash || body.resumeFromPersistence,
 					cols: body.cols,
 					rows: body.rows,
 					workspaceId: workspaceScope.workspaceId,

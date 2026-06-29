@@ -997,6 +997,13 @@ export const runtimeTaskSessionStartRequestSchema = z.object({
 	startInPlanMode: z.boolean().optional(),
 	mode: runtimeTaskSessionModeSchema.optional(),
 	resumeFromTrash: z.boolean().optional(),
+	/**
+	 * Resume a task by hydrating its persisted Cline transcript and running the
+	 * supplied prompt as the next turn (used to re-prompt a Done task back into
+	 * progress while continuing the same conversation). Unlike `resumeFromTrash`,
+	 * the prompt is NOT cleared and the session does not start in awaiting_review.
+	 */
+	resumeFromPersistence: z.boolean().optional(),
 	baseRef: z.string(),
 	cols: z.number().int().positive().optional(),
 	rows: z.number().int().positive().optional(),

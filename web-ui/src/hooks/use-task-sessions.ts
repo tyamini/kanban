@@ -47,8 +47,15 @@ interface StartTaskSessionResult {
 interface StartTaskSessionOptions {
 	resumeFromTrash?: boolean;
 	/**
+	 * Resume a Done task by hydrating its persisted transcript and running the
+	 * supplied prompt as the next turn (continues the same conversation). Used
+	 * when re-prompting a Done task back into progress.
+	 */
+	resumeFromPersistence?: boolean;
+	/**
 	 * Replaces the task's own prompt for this kickoff (e.g. a prompt enriched
-	 * with upstream handoff context). Ignored when resuming from trash.
+	 * with upstream handoff context, or a re-prompt for a Done task). Ignored
+	 * when resuming from trash.
 	 */
 	promptOverride?: string;
 }
@@ -168,6 +175,7 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 					images: options?.resumeFromTrash ? undefined : task.images,
 					startInPlanMode: options?.resumeFromTrash ? undefined : task.startInPlanMode,
 					resumeFromTrash: options?.resumeFromTrash,
+					resumeFromPersistence: options?.resumeFromPersistence,
 					baseRef: task.baseRef,
 					cols: geometry.cols,
 					rows: geometry.rows,

@@ -7,6 +7,7 @@ import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-pa
 import { ClineAgentChatPanel, type ClineAgentChatPanelHandle } from "@/components/detail-panels/cline-agent-chat-panel";
 import { ColumnContextPanel } from "@/components/detail-panels/column-context-panel";
 import { type DiffLineComment, DiffViewerPanel } from "@/components/detail-panels/diff-viewer-panel";
+import { DoneTaskRepromptComposer } from "@/components/detail-panels/done-task-reprompt-composer";
 import { FileTreePanel } from "@/components/detail-panels/file-tree-panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -333,6 +334,7 @@ export function CardDetailView({
 	onAgentOpenPrTask,
 	onMoveReviewCardToTrash,
 	onRestoreTaskFromTrash,
+	onResumeDoneTaskWithPrompt,
 	onCancelAutomaticTaskAction,
 	commitTaskLoadingById,
 	openPrTaskLoadingById,
@@ -391,6 +393,7 @@ export function CardDetailView({
 	onAgentOpenPrTask?: (taskId: string) => void;
 	onMoveReviewCardToTrash?: (taskId: string) => void;
 	onRestoreTaskFromTrash?: (taskId: string) => void;
+	onResumeDoneTaskWithPrompt?: (taskId: string, prompt: string) => void | Promise<void>;
 	onCancelAutomaticTaskAction?: (taskId: string) => void;
 	commitTaskLoadingById?: Record<string, boolean>;
 	openPrTaskLoadingById?: Record<string, boolean>;
@@ -511,7 +514,11 @@ export function CardDetailView({
 	const detailDiffContentPanelPercent = `${((1 - detailDiffFileTreeRatio) * 100).toFixed(1)}%`;
 	const detailDiffFileTreePanelFlex = `0 0 ${detailDiffFileTreePanelPercent}`;
 	const showMoveToTrashActions = selection.column.id === "review" || selection.column.id === "in_progress";
-	const isTaskTerminalEnabled = selection.column.id === "in_progress" || selection.column.id === "review";
+	const isTrashTask = selection.column.id === "trash";
+	// Done tasks keep their session alive (teardown is deferred to clear-trash), so the
+	// terminal stays connected to show the CLI agent's transcript when reopened.
+	const isTaskTerminalEnabled =
+		selection.column.id === "in_progress" || selection.column.id === "review" || isTrashTask;
 	const effectiveTaskAgentId = sessionSummary?.agentId ?? selection.card.agentId ?? selectedAgentId;
 	const showClineAgentChatPanel = isNativeClineAgentSelected(effectiveTaskAgentId);
 	const availablePaths = useMemo(() => {
@@ -667,6 +674,7 @@ export function CardDetailView({
 					? getTaskAutoReviewCancelButtonLabel(selection.card.autoReviewMode)
 					: null
 			}
+			readOnly={isTrashTask}
 		/>
 	) : (
 		<AgentTerminalPanel
@@ -701,6 +709,18 @@ export function CardDetailView({
 		/>
 	);
 
+	// For Done tasks, show the transcript read-only with a composer that sends the
+	// task back to In Progress (continuing the conversation with the new prompt).
+	const agentPanelContent =
+		isTrashTask && onResumeDoneTaskWithPrompt ? (
+			<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">{agentChatPanel}</div>
+				<DoneTaskRepromptComposer onSubmit={(prompt) => onResumeDoneTaskWithPrompt(selection.card.id, prompt)} />
+			</div>
+		) : (
+			agentChatPanel
+		);
+
 	if (isMobile) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface-0">
@@ -712,7 +732,7 @@ export function CardDetailView({
 							className="min-h-0 min-w-0 flex-1 flex-col"
 							style={{ display: mobileTab === "chat" ? "flex" : "none" }}
 						>
-							{agentChatPanel}
+							{agentPanelContent}
 						</div>
 						{/* Diff panel */}
 						<div
@@ -845,7 +865,7 @@ export function CardDetailView({
 								className="min-h-0 min-w-0"
 								style={{ display: isDiffExpanded ? "none" : "flex", width: agentPanelPercent }}
 							>
-								{agentChatPanel}
+								{agentPanelContent}
 							</div>
 							{!isDiffExpanded ? (
 								<ResizeHandle

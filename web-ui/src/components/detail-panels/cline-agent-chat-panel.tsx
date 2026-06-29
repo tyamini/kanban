@@ -96,6 +96,8 @@ export interface ClineAgentChatPanelProps {
 	onCancelAutomaticAction?: () => void;
 	cancelAutomaticActionLabel?: string | null;
 	showMoveToTrash?: boolean;
+	/** Render the transcript only — hides the composer and action footer (e.g. for Done tasks). */
+	readOnly?: boolean;
 }
 
 export const ClineAgentChatPanel = React.forwardRef<ClineAgentChatPanelHandle, ClineAgentChatPanelProps>(
@@ -127,6 +129,7 @@ export const ClineAgentChatPanel = React.forwardRef<ClineAgentChatPanelHandle, C
 			onCancelAutomaticAction,
 			cancelAutomaticActionLabel,
 			showMoveToTrash = false,
+			readOnly = false,
 		},
 		ref,
 	): ReactElement {
@@ -428,40 +431,42 @@ export const ClineAgentChatPanel = React.forwardRef<ClineAgentChatPanelHandle, C
 						{panelError}
 					</div>
 				) : null}
-				<div className="px-2 py-3">
-					<ClineChatComposer
-						taskId={taskId}
-						draft={draft}
-						onDraftChange={setDraft}
-						images={draftImages}
-						onImagesChange={setDraftImages}
-						placeholder={composerPlaceholder}
-						mode={mode}
-						onModeChange={handleModeChange}
-						showModeToggle={showComposerModeToggle}
-						canSend={canSend}
-						canCancel={canCancel}
-						onSend={handleComposerSend}
-						onCancel={handleCancelTurn}
-						modelOptions={modelOptions}
-						recommendedModelIds={modelPickerOptions.recommendedModelIds}
-						pinSelectedModelToTop={modelPickerOptions.shouldPinSelectedModelToTop}
-						selectedModelId={clineSettings.modelId}
-						selectedModelButtonText={selectedModelButtonText}
-						onSelectModel={handleSelectModel}
-						reasoningEnabledModelIds={reasoningEnabledModelIds}
-						selectedReasoningEffort={clineSettings.reasoningEffort}
-						onSelectReasoningEffort={handleSelectReasoningEffort}
-						isModelLoading={clineSettings.isLoadingProviderModels}
-						isModelSaving={isSavingModel}
-						modelPickerDisabled={isSavingModel || clineSettings.providerId.trim().length === 0}
-						isSending={isSavingModel || isSending}
-						warningMessage={summary?.warningMessage ?? null}
-						attachmentWarningMessage={attachmentWarningMessage}
-						workspaceId={workspaceId}
-					/>
-				</div>
-				{showActionFooter ? (
+				{readOnly ? null : (
+					<div className="px-2 py-3">
+						<ClineChatComposer
+							taskId={taskId}
+							draft={draft}
+							onDraftChange={setDraft}
+							images={draftImages}
+							onImagesChange={setDraftImages}
+							placeholder={composerPlaceholder}
+							mode={mode}
+							onModeChange={handleModeChange}
+							showModeToggle={showComposerModeToggle}
+							canSend={canSend}
+							canCancel={canCancel}
+							onSend={handleComposerSend}
+							onCancel={handleCancelTurn}
+							modelOptions={modelOptions}
+							recommendedModelIds={modelPickerOptions.recommendedModelIds}
+							pinSelectedModelToTop={modelPickerOptions.shouldPinSelectedModelToTop}
+							selectedModelId={clineSettings.modelId}
+							selectedModelButtonText={selectedModelButtonText}
+							onSelectModel={handleSelectModel}
+							reasoningEnabledModelIds={reasoningEnabledModelIds}
+							selectedReasoningEffort={clineSettings.reasoningEffort}
+							onSelectReasoningEffort={handleSelectReasoningEffort}
+							isModelLoading={clineSettings.isLoadingProviderModels}
+							isModelSaving={isSavingModel}
+							modelPickerDisabled={isSavingModel || clineSettings.providerId.trim().length === 0}
+							isSending={isSavingModel || isSending}
+							warningMessage={summary?.warningMessage ?? null}
+							attachmentWarningMessage={attachmentWarningMessage}
+							workspaceId={workspaceId}
+						/>
+					</div>
+				)}
+				{readOnly ? null : showActionFooter ? (
 					<div className="flex flex-col gap-2 px-3 pb-3">
 						{showReviewActions ? (
 							<div className="flex gap-2">

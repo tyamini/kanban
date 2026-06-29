@@ -274,7 +274,7 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(1);
 	});
 
-	it("stops the main task session and its detail terminal shell when a task is trashed", async () => {
+	it("keeps the agent session alive but closes the detail terminal shell when a task is trashed", async () => {
 		let latestSnapshot: HookSnapshot | null = null;
 		const stopTaskSession = vi.fn(async (_taskId: string) => {});
 
@@ -302,9 +302,11 @@ describe("useLinkedBacklogTaskActions", () => {
 			await initialSnapshot.confirmMoveTaskToTrash(reviewTask, initialSnapshot.board);
 		});
 
-		expect(stopTaskSession).toHaveBeenCalledTimes(2);
-		expect(stopTaskSession).toHaveBeenNthCalledWith(1, reviewTask.id);
-		expect(stopTaskSession).toHaveBeenNthCalledWith(2, getDetailTerminalTaskId(reviewTask.id));
+		// The agent session is kept alive (so the Done task can be reopened/re-prompted);
+		// only the per-task detail terminal shell is closed.
+		expect(stopTaskSession).toHaveBeenCalledTimes(1);
+		expect(stopTaskSession).toHaveBeenCalledWith(getDetailTerminalTaskId(reviewTask.id));
+		expect(stopTaskSession).not.toHaveBeenCalledWith(reviewTask.id);
 	});
 
 	it("trashes tasks directly through the request handler", async () => {
@@ -337,7 +339,9 @@ describe("useLinkedBacklogTaskActions", () => {
 		const nextSnapshot = latestSnapshot as HookSnapshot;
 		expect(nextSnapshot.board.columns.find((column) => column.id === "review")?.cards).toHaveLength(0);
 		expect(nextSnapshot.board.columns.find((column) => column.id === "trash")?.cards[0]?.id).toBe("task-2");
-		expect(cleanupTaskWorkspace).toHaveBeenCalledWith("task-2");
+		// Worktree cleanup is deferred until the task is removed from Done (clear-trash),
+		// so moving to Done must NOT delete the worktree.
+		expect(cleanupTaskWorkspace).not.toHaveBeenCalled();
 	});
 
 	it("can queue the next dependency-unblocked animation before the previous start resolves", async () => {
