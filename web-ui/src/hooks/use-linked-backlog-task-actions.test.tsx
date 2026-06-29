@@ -98,6 +98,8 @@ function HookHarness({
 		board,
 		setBoard,
 		setSelectedTaskId: () => {},
+		sessions: {},
+		setPendingHandoffPrompt: () => {},
 		stopTaskSession: stopTaskSession ?? (async () => {}),
 		cleanupTaskWorkspace: cleanupTaskWorkspace ?? (async () => null),
 		maybeRequestNotificationPermissionForTaskStart: () => {},

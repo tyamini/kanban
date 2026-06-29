@@ -8,6 +8,7 @@ import { ClineAgentChatPanel, type ClineAgentChatPanelHandle } from "@/component
 import { ColumnContextPanel } from "@/components/detail-panels/column-context-panel";
 import { type DiffLineComment, DiffViewerPanel } from "@/components/detail-panels/diff-viewer-panel";
 import { FileTreePanel } from "@/components/detail-panels/file-tree-panel";
+import { TaskHandoffConfig } from "@/components/task-handoff-config";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import type { ClineChatActionResult } from "@/hooks/use-cline-chat-runtime-actions";
@@ -29,7 +30,13 @@ import type {
 import { useRuntimeWorkspaceChanges } from "@/runtime/use-runtime-workspace-changes";
 import { useTaskWorkspaceStateVersionValue } from "@/stores/workspace-metadata-store";
 import { useTerminalThemeColors } from "@/terminal/theme-colors";
-import { type BoardCard, type CardSelection, getTaskAutoReviewCancelButtonLabel } from "@/types";
+import {
+	type BoardCard,
+	type BoardDependency,
+	type CardSelection,
+	getTaskAutoReviewCancelButtonLabel,
+	type TaskHandoff,
+} from "@/types";
 import { useWindowEvent } from "@/utils/react-use";
 
 // We still poll the open detail diff because line content can change without changing
@@ -316,6 +323,8 @@ export function CardDetailView({
 	runtimeConfig = null,
 	sessionSummary,
 	taskSessions,
+	dependencies = [],
+	onUpdateDependencyHandoff,
 	onSessionSummary,
 	onCardSelect,
 	onTaskDragEnd,
@@ -374,6 +383,8 @@ export function CardDetailView({
 	runtimeConfig?: RuntimeConfigResponse | null;
 	sessionSummary: RuntimeTaskSessionSummary | null;
 	taskSessions: Record<string, RuntimeTaskSessionSummary>;
+	dependencies?: BoardDependency[];
+	onUpdateDependencyHandoff?: (dependencyId: string, handoff: TaskHandoff | undefined) => void;
 	onSessionSummary: (summary: RuntimeTaskSessionSummary) => void;
 	onCardSelect: (taskId: string) => void;
 	onTaskDragEnd: (result: DropResult) => void;
@@ -631,6 +642,23 @@ export function CardDetailView({
 
 	const showBottomTerminal = bottomTerminalOpen && !!bottomTerminalTaskId;
 
+	const incomingDependency = dependencies.find((dependency) => dependency.fromTaskId === selection.card.id);
+	const handoffUpstreamTask = incomingDependency
+		? (selection.allColumns
+				.flatMap((column) => column.cards)
+				.find((card) => card.id === incomingDependency.toTaskId) ?? null)
+		: null;
+	const handoffConfig =
+		incomingDependency && handoffUpstreamTask && onUpdateDependencyHandoff ? (
+			<TaskHandoffConfig
+				dependency={incomingDependency}
+				upstreamTask={handoffUpstreamTask}
+				downstreamTask={selection.card}
+				upstreamSummary={taskSessions[handoffUpstreamTask.id]}
+				onChange={onUpdateDependencyHandoff}
+			/>
+		) : null;
+
 	const agentChatPanel = showClineAgentChatPanel ? (
 		<ClineAgentChatPanel
 			ref={clineAgentChatPanelRef}
@@ -712,6 +740,7 @@ export function CardDetailView({
 							className="min-h-0 min-w-0 flex-1 flex-col"
 							style={{ display: mobileTab === "chat" ? "flex" : "none" }}
 						>
+							{handoffConfig}
 							{agentChatPanel}
 						</div>
 						{/* Diff panel */}
@@ -840,6 +869,7 @@ export function CardDetailView({
 					<div className="flex min-h-0 flex-1 overflow-hidden">{gitHistoryPanel}</div>
 				) : (
 					<>
+						{handoffConfig}
 						<div ref={mainRowRef} className="flex min-h-0 flex-1 overflow-hidden">
 							<div
 								className="min-h-0 min-w-0"

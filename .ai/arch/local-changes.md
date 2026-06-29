@@ -60,6 +60,44 @@ upstream independently.
    which crashed the link-tasks UI. Polyfilled from `crypto.getRandomValues`
    (available in insecure contexts). (Good upstream PR candidate.)
 
+6. **Auto-review "Move to Done" mode** — `src/core/api-contract.ts`,
+   `src/core/task-board-mutations.ts`, `src/commands/task.ts`,
+   `web-ui/src/types/board.ts`, `web-ui/src/hooks/app-utils.tsx`,
+   `web-ui/src/hooks/use-review-auto-actions.ts`,
+   `web-ui/src/components/task-create-dialog.tsx`,
+   `web-ui/src/components/task-inline-create-card.tsx`
+   Adds a third auto-review mode (`done`) alongside `commit`/`pr` that moves a
+   finished task straight to Done instead of making a commit/PR. Unlike the
+   commit/pr modes it has no "changed files" gate, so a task that intentionally
+   produces no changes still advances. The mode value is threaded through every
+   parse/persist site (runtime enum + legacy `move_to_done` mapping, the
+   `normalizeTaskAutoReviewMode` persistence path, the CLI `parseAutoReviewMode`,
+   and the web-ui localStorage/board normalizers) so it is never silently
+   rewritten back to `commit`.
+
+7. **Linked-task handoff (input/output between linked tasks)** —
+   `src/core/api-contract.ts`, `src/core/task-board-mutations.ts`,
+   `web-ui/src/types/board.ts`, `web-ui/src/state/board-state.ts`,
+   `web-ui/src/handoff/*`, `web-ui/src/utils/interpolate-template.ts`,
+   `web-ui/src/hooks/use-linked-backlog-task-actions.ts`,
+   `web-ui/src/hooks/use-task-sessions.ts`, `web-ui/src/hooks/use-board-interactions.ts`,
+   `web-ui/src/components/task-handoff-config.tsx`,
+   `web-ui/src/components/card-detail-view.tsx`, `web-ui/src/App.tsx`
+   Extends the existing task-dependency links so an upstream task's result flows
+   into the downstream task's prompt when the dependency auto-starts it. A new
+   optional `handoff` field on the dependency edge (`mode: summary|template|none`,
+   plus an optional template) persists in `board.json`. On the auto-start path,
+   the upstream's final agent message + git workspace metadata are bound to
+   `{{from.*}}` variables (`from.summary`, `from.pr_url`, `from.branch`, …) and
+   injected into the downstream prompt via a shared `interpolateTemplate` engine —
+   client-side only, so no runtime/tRPC change. Default mode (`summary`) prepends
+   the upstream's final message; `template` lets the user write a custom prompt.
+   Configured + previewed in the downstream task's detail view ("Input from →
+   upstream" panel). Direction reminder: the link's `to` task runs first
+   (producer); the `from` task runs second and receives the handoff. Design notes
+   and deferred work (structured handoff block, AND-gating, manual-start
+   injection, CLI parity) live in `.plan/docs/linked-task-handoff-plan.md`.
+
 ## Build & deploy
 
 Prerequisites: Node 22+ (`nvm use 22`).

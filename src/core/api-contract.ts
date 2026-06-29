@@ -185,11 +185,21 @@ export const runtimeBoardColumnSchema = z.object({
 });
 export type RuntimeBoardColumn = z.infer<typeof runtimeBoardColumnSchema>;
 
+export const runtimeTaskHandoffModeSchema = z.enum(["summary", "template", "none"]);
+export type RuntimeTaskHandoffMode = z.infer<typeof runtimeTaskHandoffModeSchema>;
+
+export const runtimeTaskHandoffSchema = z.object({
+	mode: runtimeTaskHandoffModeSchema.default("summary"),
+	template: z.string().optional(),
+});
+export type RuntimeTaskHandoff = z.infer<typeof runtimeTaskHandoffSchema>;
+
 export const runtimeBoardDependencySchema = z.object({
 	id: z.string(),
 	fromTaskId: z.string(),
 	toTaskId: z.string(),
 	createdAt: z.number(),
+	handoff: runtimeTaskHandoffSchema.optional(),
 });
 export type RuntimeBoardDependency = z.infer<typeof runtimeBoardDependencySchema>;
 

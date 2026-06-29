@@ -6,6 +6,7 @@ import type {
 	RuntimeBoardDependency,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskClineSettings,
+	RuntimeTaskHandoff,
 	RuntimeTaskImage,
 } from "./api-contract";
 import { createUniqueTaskId } from "./task-id";
@@ -407,6 +408,37 @@ export function removeTaskDependency(board: RuntimeBoardData, dependencyId: stri
 			dependencies,
 		},
 		removed: true,
+	};
+}
+
+export function updateTaskDependencyHandoff(
+	board: RuntimeBoardData,
+	dependencyId: string,
+	handoff: RuntimeTaskHandoff | undefined,
+): { board: RuntimeBoardData; updated: boolean } {
+	let updated = false;
+	const dependencies = board.dependencies.map((dependency) => {
+		if (dependency.id !== dependencyId) {
+			return dependency;
+		}
+		updated = true;
+		const next = { ...dependency };
+		if (handoff === undefined) {
+			delete next.handoff;
+		} else {
+			next.handoff = handoff;
+		}
+		return next;
+	});
+	if (!updated) {
+		return { board, updated: false };
+	}
+	return {
+		board: {
+			...board,
+			dependencies,
+		},
+		updated: true,
 	};
 }
 

@@ -19,7 +19,7 @@ import {
 } from "@/state/board-state";
 import { clearTaskWorkspaceInfo, setTaskWorkspaceInfo } from "@/stores/workspace-metadata-store";
 import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
-import type { BoardCard, BoardColumnId, BoardData } from "@/types";
+import type { BoardCard, BoardColumnId, BoardData, TaskHandoff } from "@/types";
 import { resolveTaskAutoReviewMode } from "@/types";
 import { getNextDetailTaskIdAfterTrashMove } from "@/utils/detail-view-task-order";
 import {
@@ -76,6 +76,7 @@ export interface UseBoardInteractionsResult {
 	confirmMoveTaskToTrash: (task: BoardCard, currentBoard?: BoardData) => Promise<void>;
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
 	handleDeleteDependency: (dependencyId: string) => void;
+	handleUpdateDependencyHandoff: (dependencyId: string, handoff: TaskHandoff | undefined) => void;
 	handleDragEnd: (result: DropResult, options?: { selectDroppedTask?: boolean }) => void;
 	handleStartTask: (taskId: string) => void;
 	handleStartAllBacklogTasks: (taskIds?: string[]) => void;
@@ -120,6 +121,18 @@ export function useBoardInteractions({
 	const pendingProgrammaticStartMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticStartMoveCompletion>
 	>({});
+	// One-shot prompt overrides (e.g. handoff-enriched prompts) keyed by task id.
+	// Set just before a task is auto-started and consumed inside kickoffTaskInProgress,
+	// so the override survives the async card-move/animation boundary.
+	const handoffPromptOverrideByTaskIdRef = useRef<Map<string, string>>(new Map());
+
+	const setPendingHandoffPrompt = useCallback((taskId: string, prompt: string | undefined) => {
+		if (prompt === undefined) {
+			handoffPromptOverrideByTaskIdRef.current.delete(taskId);
+		} else {
+			handoffPromptOverrideByTaskIdRef.current.set(taskId, prompt);
+		}
+	}, []);
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -330,7 +343,9 @@ export function useBoardInteractions({
 					setTaskWorkspaceInfo(infoAfterEnsure);
 				}
 			}
-			const started = await startTaskSession(task);
+			const promptOverride = handoffPromptOverrideByTaskIdRef.current.get(taskId);
+			handoffPromptOverrideByTaskIdRef.current.delete(taskId);
+			const started = await (promptOverride ? startTaskSession(task, { promptOverride }) : startTaskSession(task));
 			if (!started.ok) {
 				notifyError(started.message ?? "Could not start task session.");
 				if (optimisticMove) {
@@ -506,18 +521,25 @@ export function useBoardInteractions({
 		});
 	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
 
-	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
-		useLinkedBacklogTaskActions({
-			board,
-			setBoard,
-			setSelectedTaskId,
-			stopTaskSession,
-			cleanupTaskWorkspace,
-			maybeRequestNotificationPermissionForTaskStart,
-			kickoffTaskInProgress,
-			startBacklogTaskWithAnimation,
-			waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
-		});
+	const {
+		confirmMoveTaskToTrash,
+		handleCreateDependency,
+		handleDeleteDependency,
+		handleUpdateDependencyHandoff,
+		requestMoveTaskToTrash,
+	} = useLinkedBacklogTaskActions({
+		board,
+		setBoard,
+		setSelectedTaskId,
+		sessions,
+		setPendingHandoffPrompt,
+		stopTaskSession,
+		cleanupTaskWorkspace,
+		maybeRequestNotificationPermissionForTaskStart,
+		kickoffTaskInProgress,
+		startBacklogTaskWithAnimation,
+		waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
+	});
 
 	useEffect(() => {
 		setRequestMoveTaskToTrashHandler(requestMoveTaskToTrash);
@@ -886,6 +908,7 @@ export function useBoardInteractions({
 		confirmMoveTaskToTrash,
 		handleCreateDependency,
 		handleDeleteDependency,
+		handleUpdateDependencyHandoff,
 		handleDragEnd,
 		handleStartTask,
 		handleStartAllBacklogTasks,

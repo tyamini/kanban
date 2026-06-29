@@ -3,6 +3,8 @@ import type {
 	RuntimeBoardColumnId,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskClineSettings,
+	RuntimeTaskHandoff,
+	RuntimeTaskHandoffMode,
 	RuntimeTaskImage,
 } from "@/runtime/types";
 
@@ -55,11 +57,24 @@ export interface BoardColumn {
 	cards: BoardCard[];
 }
 
+export type TaskHandoffMode = RuntimeTaskHandoffMode;
+export type TaskHandoff = RuntimeTaskHandoff;
+
+export const DEFAULT_TASK_HANDOFF_MODE: TaskHandoffMode = "summary";
+
+export function resolveTaskHandoffMode(mode: TaskHandoffMode | null | undefined): TaskHandoffMode {
+	if (mode === "template" || mode === "none") {
+		return mode;
+	}
+	return DEFAULT_TASK_HANDOFF_MODE;
+}
+
 export interface BoardDependency {
 	id: string;
 	fromTaskId: string;
 	toTaskId: string;
 	createdAt: number;
+	handoff?: TaskHandoff;
 }
 
 export interface BoardData {

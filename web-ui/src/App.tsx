@@ -562,6 +562,7 @@ export default function App(): ReactElement {
 		handleProgrammaticCardMoveReady,
 		handleCreateDependency,
 		handleDeleteDependency,
+		handleUpdateDependencyHandoff,
 		handleDragEnd,
 		handleStartTask,
 		handleStartAllBacklogTasks,
@@ -1016,6 +1017,8 @@ export default function App(): ReactElement {
 									runtimeConfig={runtimeProjectConfig ?? null}
 									sessionSummary={detailSession}
 									taskSessions={sessions}
+									dependencies={board.dependencies}
+									onUpdateDependencyHandoff={handleUpdateDependencyHandoff}
 									onSessionSummary={upsertSession}
 									onCardSelect={handleCardSelect}
 									onTaskDragEnd={handleDetailTaskDragEnd}

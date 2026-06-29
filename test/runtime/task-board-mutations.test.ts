@@ -8,6 +8,7 @@ import {
 	moveTaskToColumn,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
+	updateTaskDependencyHandoff,
 } from "../../src/core/task-board-mutations";
 
 function createBoard(): RuntimeBoardData {
@@ -53,6 +54,48 @@ describe("deleteTasksFromBoard", () => {
 		expect(deleted.deleted).toBe(true);
 		expect(deleted.deletedTaskIds.sort()).toEqual(["aaaaa", "bbbbb"]);
 		expect(deleted.board.columns.find((column) => column.id === "trash")?.cards).toEqual([]);
+	});
+});
+
+describe("updateTaskDependencyHandoff", () => {
+	function createLinkedBoard(): { board: RuntimeBoardData; dependencyId: string } {
+		const createA = addTaskToColumn(
+			createBoard(),
+			"backlog",
+			{ prompt: "Task A", baseRef: "main" },
+			() => "aaaaa111",
+		);
+		const createB = addTaskToColumn(createA.board, "review", { prompt: "Task B", baseRef: "main" }, () => "bbbbb111");
+		const linked = addTaskDependency(createB.board, "aaaaa", "bbbbb");
+		if (!linked.added || !linked.dependency) {
+			throw new Error("Expected dependency to be created.");
+		}
+		return { board: linked.board, dependencyId: linked.dependency.id };
+	}
+
+	it("sets a handoff config on the dependency", () => {
+		const { board, dependencyId } = createLinkedBoard();
+		const updated = updateTaskDependencyHandoff(board, dependencyId, {
+			mode: "template",
+			template: "Review {{from.pr_url}}",
+		});
+		expect(updated.updated).toBe(true);
+		expect(updated.board.dependencies[0]?.handoff).toEqual({ mode: "template", template: "Review {{from.pr_url}}" });
+	});
+
+	it("clears the handoff config when passed undefined", () => {
+		const { board, dependencyId } = createLinkedBoard();
+		const withHandoff = updateTaskDependencyHandoff(board, dependencyId, { mode: "none" });
+		const cleared = updateTaskDependencyHandoff(withHandoff.board, dependencyId, undefined);
+		expect(cleared.updated).toBe(true);
+		expect(cleared.board.dependencies[0]?.handoff).toBeUndefined();
+	});
+
+	it("reports updated=false for an unknown dependency id", () => {
+		const { board } = createLinkedBoard();
+		const result = updateTaskDependencyHandoff(board, "does-not-exist", { mode: "summary" });
+		expect(result.updated).toBe(false);
+		expect(result.board).toBe(board);
 	});
 });
 

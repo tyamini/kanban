@@ -15,6 +15,7 @@ import {
 	DEFAULT_TASK_AUTO_REVIEW_MODE,
 	resolveTaskAutoReviewMode,
 	type TaskAutoReviewMode,
+	type TaskHandoff,
 	type TaskImage,
 } from "@/types";
 
@@ -228,6 +229,7 @@ function normalizeDependency(rawDependency: unknown, taskIds: Set<string>): Boar
 		fromTaskId?: unknown;
 		toTaskId?: unknown;
 		createdAt?: unknown;
+		handoff?: unknown;
 	};
 	const fromTaskId = typeof dependency.fromTaskId === "string" ? dependency.fromTaskId.trim() : "";
 	const toTaskId = typeof dependency.toTaskId === "string" ? dependency.toTaskId.trim() : "";
@@ -238,12 +240,25 @@ function normalizeDependency(rawDependency: unknown, taskIds: Set<string>): Boar
 		return null;
 	}
 
+	const handoff = normalizeHandoff(dependency.handoff);
 	return {
 		id: typeof dependency.id === "string" && dependency.id ? dependency.id : createDependencyId(),
 		fromTaskId,
 		toTaskId,
 		createdAt: typeof dependency.createdAt === "number" ? dependency.createdAt : Date.now(),
+		...(handoff ? { handoff } : {}),
 	};
+}
+
+function normalizeHandoff(rawHandoff: unknown): TaskHandoff | null {
+	if (!rawHandoff || typeof rawHandoff !== "object") {
+		return null;
+	}
+	const handoff = rawHandoff as { mode?: unknown; template?: unknown };
+	const mode =
+		handoff.mode === "summary" || handoff.mode === "template" || handoff.mode === "none" ? handoff.mode : "summary";
+	const template = typeof handoff.template === "string" ? handoff.template : undefined;
+	return { mode, ...(template !== undefined ? { template } : {}) };
 }
 function removeDependenciesByTaskIds(board: BoardData, taskIds: Set<string>): BoardData {
 	if (taskIds.size === 0 || board.dependencies.length === 0) {
@@ -373,6 +388,14 @@ export function canCreateTaskDependency(board: BoardData, fromTaskId: string, to
 
 export function removeTaskDependency(board: BoardData, dependencyId: string): { board: BoardData; removed: boolean } {
 	return runtimeTaskState.removeTaskDependency(board, dependencyId);
+}
+
+export function updateTaskDependencyHandoff(
+	board: BoardData,
+	dependencyId: string,
+	handoff: TaskHandoff | undefined,
+): { board: BoardData; updated: boolean } {
+	return runtimeTaskState.updateTaskDependencyHandoff(board, dependencyId, handoff);
 }
 
 export function getReadyLinkedTaskIdsForTaskInTrash(board: BoardData, taskId: string): string[] {

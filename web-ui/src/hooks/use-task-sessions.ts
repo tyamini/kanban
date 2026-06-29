@@ -46,6 +46,11 @@ interface StartTaskSessionResult {
 
 interface StartTaskSessionOptions {
 	resumeFromTrash?: boolean;
+	/**
+	 * Replaces the task's own prompt for this kickoff (e.g. a prompt enriched
+	 * with upstream handoff context). Ignored when resuming from trash.
+	 */
+	promptOverride?: string;
 }
 
 export interface UseTaskSessionsResult {
@@ -150,7 +155,9 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 				return { ok: false, message: "No project selected." };
 			}
 			try {
-				const kickoffPrompt = options?.resumeFromTrash ? "" : task.prompt.trim();
+				const kickoffPrompt = options?.resumeFromTrash
+					? ""
+					: (options?.promptOverride?.trim() ?? task.prompt.trim());
 				const trpcClient = getRuntimeTrpcClient(currentProjectId);
 				const geometry =
 					getTerminalGeometry(task.id) ?? estimateTaskSessionGeometry(window.innerWidth, window.innerHeight);
