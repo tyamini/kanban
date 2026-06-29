@@ -1,7 +1,15 @@
 import * as RadixCheckbox from "@radix-ui/react-checkbox";
 import { deriveTaskTitleFromPrompt } from "@runtime-task-title";
 import { ArrowBigUp, Check, Command, CornerDownLeft } from "lucide-react";
-import { type Dispatch, type ReactElement, type SetStateAction, useCallback, useRef, useState } from "react";
+import {
+	type Dispatch,
+	type ReactElement,
+	type ReactNode,
+	type SetStateAction,
+	useCallback,
+	useRef,
+	useState,
+} from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BranchSelectDropdown, type BranchSelectOption } from "@/components/branch-select-dropdown";
@@ -65,6 +73,7 @@ export function TaskInlineCreateCard({
 	branchRef,
 	branchOptions,
 	onBranchRefChange,
+	handoffSection,
 	enabled = true,
 	mode = "create",
 	idPrefix = "inline-task",
@@ -97,6 +106,8 @@ export function TaskInlineCreateCard({
 	branchRef: string;
 	branchOptions: TaskBranchOption[];
 	onBranchRefChange: (value: string) => void;
+	/** Optional handoff ("input from upstream") config, shown only when the task has an incoming link. */
+	handoffSection?: ReactNode;
 	enabled?: boolean;
 	mode?: TaskInlineCardMode;
 	idPrefix?: string;
@@ -330,6 +341,8 @@ export function TaskInlineCreateCard({
 					/>
 				) : null}
 			</div>
+
+			{handoffSection ? <div className="mt-3">{handoffSection}</div> : null}
 
 			<div className={`flex gap-2 mt-3 ${mode === "edit" ? "justify-end" : "justify-between"}`}>
 				{mode === "create" && onCancel ? (

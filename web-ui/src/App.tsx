@@ -17,6 +17,7 @@ import { ProjectNavigationPanel } from "@/components/project-navigation-panel";
 import { RuntimeSettingsDialog, type RuntimeSettingsSection } from "@/components/runtime-settings-dialog";
 import { StartupOnboardingDialog } from "@/components/startup-onboarding-dialog";
 import { TaskCreateDialog } from "@/components/task-create-dialog";
+import { TaskHandoffConfig } from "@/components/task-handoff-config";
 import { TaskInlineCreateCard } from "@/components/task-inline-create-card";
 import { TopBar } from "@/components/top-bar";
 import { Button } from "@/components/ui/button";
@@ -762,6 +763,28 @@ export default function App(): ReactElement {
 		[handleCancelCreateTask],
 	);
 
+	const editingTaskCard = editingTaskId
+		? (board.columns.flatMap((column) => column.cards).find((card) => card.id === editingTaskId) ?? null)
+		: null;
+	const editingIncomingDependency = editingTaskId
+		? board.dependencies.find((dependency) => dependency.fromTaskId === editingTaskId)
+		: undefined;
+	const editingHandoffUpstreamTask = editingIncomingDependency
+		? (board.columns
+				.flatMap((column) => column.cards)
+				.find((card) => card.id === editingIncomingDependency.toTaskId) ?? null)
+		: null;
+	const inlineHandoffSection =
+		editingTaskCard && editingIncomingDependency && editingHandoffUpstreamTask ? (
+			<TaskHandoffConfig
+				dependency={editingIncomingDependency}
+				upstreamTask={editingHandoffUpstreamTask}
+				downstreamTask={{ ...editingTaskCard, prompt: editTaskPrompt }}
+				upstreamSummary={sessions[editingHandoffUpstreamTask.id]}
+				onChange={handleUpdateDependencyHandoff}
+			/>
+		) : null;
+
 	const inlineTaskEditor = editingTaskId ? (
 		<TaskInlineCreateCard
 			prompt={editTaskPrompt}
@@ -782,6 +805,7 @@ export default function App(): ReactElement {
 			branchRef={editTaskBranchRef}
 			branchOptions={createTaskBranchOptions}
 			onBranchRefChange={setEditTaskBranchRef}
+			handoffSection={inlineHandoffSection}
 			agentId={editTaskAgentId}
 			onAgentIdChange={setEditTaskAgentId}
 			clineSettings={editTaskClineSettings}
@@ -1017,8 +1041,6 @@ export default function App(): ReactElement {
 									runtimeConfig={runtimeProjectConfig ?? null}
 									sessionSummary={detailSession}
 									taskSessions={sessions}
-									dependencies={board.dependencies}
-									onUpdateDependencyHandoff={handleUpdateDependencyHandoff}
 									onSessionSummary={upsertSession}
 									onCardSelect={handleCardSelect}
 									onTaskDragEnd={handleDetailTaskDragEnd}

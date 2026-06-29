@@ -7,7 +7,9 @@ Last updated: 2026-06-29
 v1 shipped with the documented defaults: OR fan-in, injection on the
 dependency-driven auto-start path only. Manual starts, AND-gating, CLI parity,
 and the structured `\`\`\`handoff` block remain deferred (§11). UI lives in the
-downstream task's detail view (`TaskHandoffConfig`) rather than an arrow popover.
+downstream task's editor form (`TaskHandoffConfig` rendered inside
+`TaskInlineCreateCard`) rather than an arrow popover or the detail view's agent
+pane (the original detail-pane placement proved undiscoverable and was moved).
 
 ## 1. Goal
 

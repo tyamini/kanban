@@ -82,7 +82,7 @@ upstream independently.
    `web-ui/src/hooks/use-linked-backlog-task-actions.ts`,
    `web-ui/src/hooks/use-task-sessions.ts`, `web-ui/src/hooks/use-board-interactions.ts`,
    `web-ui/src/components/task-handoff-config.tsx`,
-   `web-ui/src/components/card-detail-view.tsx`, `web-ui/src/App.tsx`
+   `web-ui/src/components/task-inline-create-card.tsx`, `web-ui/src/App.tsx`
    Extends the existing task-dependency links so an upstream task's result flows
    into the downstream task's prompt when the dependency auto-starts it. A new
    optional `handoff` field on the dependency edge (`mode: summary|template|none`,
@@ -92,11 +92,16 @@ upstream independently.
    injected into the downstream prompt via a shared `interpolateTemplate` engine —
    client-side only, so no runtime/tRPC change. Default mode (`summary`) prepends
    the upstream's final message; `template` lets the user write a custom prompt.
-   Configured + previewed in the downstream task's detail view ("Input from →
-   upstream" panel). Direction reminder: the link's `to` task runs first
-   (producer); the `from` task runs second and receives the handoff. Design notes
-   and deferred work (structured handoff block, AND-gating, manual-start
-   injection, CLI parity) live in `.plan/docs/linked-task-handoff-plan.md`.
+   **Configured in the task editor itself**: the `TaskHandoffConfig` panel renders
+   inside `TaskInlineCreateCard` (the inline edit form), built in `App.tsx` from
+   the edited task's incoming dependency and fed the *live* edit-prompt for an
+   accurate resolved-prompt preview. It is hidden entirely unless the task has an
+   incoming link, so it only appears on the downstream/consumer task. (Earlier the
+   panel lived in `card-detail-view.tsx`'s right agent pane, which was undiscoverable
+   — users look in the task editor — so it was moved.) Direction reminder: the
+   link's `to` task runs first (producer); the `from` task runs second and receives
+   the handoff. Design notes and deferred work (structured handoff block, AND-gating,
+   manual-start injection, CLI parity) live in `.plan/docs/linked-task-handoff-plan.md`.
 
 ## Build & deploy
 

@@ -70,12 +70,12 @@ export function TaskHandoffConfig({
 	};
 
 	return (
-		<div className="border-b border-border bg-surface-1 px-3 py-2 text-xs">
+		<div className="rounded-md border border-border bg-surface-1 px-2.5 py-2 text-xs">
 			<div className="mb-2 flex items-center gap-1.5 text-text-secondary">
 				<span className="font-medium text-text-primary">Input from</span>
-				<span className="truncate text-text-secondary">{upstreamTask.title || "Untitled task"}</span>
+				<span className="min-w-0 flex-1 truncate text-text-secondary">{upstreamTask.title || "Untitled task"}</span>
 				<ArrowRight size={12} className="shrink-0 text-text-tertiary" />
-				<span className="truncate text-text-secondary">{downstreamTask.title || "this task"}</span>
+				<span className="shrink-0 text-text-tertiary">this task</span>
 			</div>
 
 			<div className="flex flex-wrap gap-1">
