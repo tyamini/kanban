@@ -154,6 +154,25 @@ export function useReviewAutoActions({
 				}
 
 				const autoReviewMode = resolveTaskAutoReviewMode(reviewTask.autoReviewMode);
+
+				if (autoReviewMode === "done") {
+					if (!moveToTrashInFlightTaskIdsRef.current.has(reviewTask.id)) {
+						scheduleAutoReviewAction(reviewTask.id, "done", () => {
+							const latestSelection = findCardSelection(boardRef.current, reviewTask.id);
+							if (!latestSelection || latestSelection.column.id !== "review") return;
+							if (!isTaskAutoReviewEnabled(latestSelection.card)) return;
+							if (resolveTaskAutoReviewMode(latestSelection.card.autoReviewMode) !== "done") return;
+							moveToTrashInFlightTaskIdsRef.current.add(reviewTask.id);
+							void requestMoveTaskToTrashRef
+								.current(reviewTask.id, "review", { skipWorkingChangeWarning: true })
+								.finally(() => {
+									moveToTrashInFlightTaskIdsRef.current.delete(reviewTask.id);
+								});
+						});
+					}
+					continue;
+				}
+
 				const loadingState = taskGitActionLoadingByTaskId[reviewTask.id];
 				const isGitActionInFlight =
 					autoReviewMode === "commit"

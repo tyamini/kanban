@@ -14,7 +14,7 @@ export type TaskImage = RuntimeTaskImage;
 export const DEFAULT_TASK_AUTO_REVIEW_MODE: TaskAutoReviewMode = "commit";
 
 export function resolveTaskAutoReviewMode(mode: TaskAutoReviewMode | null | undefined): TaskAutoReviewMode {
-	if (mode === "pr") {
+	if (mode === "pr" || mode === "done") {
 		return mode;
 	}
 	return DEFAULT_TASK_AUTO_REVIEW_MODE;
@@ -22,17 +22,15 @@ export function resolveTaskAutoReviewMode(mode: TaskAutoReviewMode | null | unde
 
 export function getTaskAutoReviewActionLabel(mode: TaskAutoReviewMode | null | undefined): string {
 	const resolvedMode = resolveTaskAutoReviewMode(mode);
-	if (resolvedMode === "pr") {
-		return "PR";
-	}
+	if (resolvedMode === "pr") return "PR";
+	if (resolvedMode === "done") return "done";
 	return "commit";
 }
 
 export function getTaskAutoReviewCancelButtonLabel(mode: TaskAutoReviewMode | null | undefined): string {
 	const resolvedMode = resolveTaskAutoReviewMode(mode);
-	if (resolvedMode === "pr") {
-		return "Cancel Auto-PR";
-	}
+	if (resolvedMode === "pr") return "Cancel Auto-PR";
+	if (resolvedMode === "done") return "Cancel Auto-done";
 	return "Cancel Auto-commit";
 }
 

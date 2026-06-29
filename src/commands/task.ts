@@ -72,14 +72,14 @@ function parseListColumn(value: string | undefined): ListTaskColumn | undefined 
 	throw new Error(`Invalid column "${value}". Expected one of: ${LIST_TASK_COLUMNS.join(", ")}, done.`);
 }
 
-function parseAutoReviewMode(value: string | undefined): "commit" | "pr" | undefined {
+function parseAutoReviewMode(value: string | undefined): "commit" | "pr" | "done" | undefined {
 	if (value === undefined) {
 		return undefined;
 	}
-	if (value === "commit" || value === "pr") {
+	if (value === "commit" || value === "pr" || value === "done") {
 		return value;
 	}
-	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr.`);
+	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr, done.`);
 }
 
 const VALID_AGENT_IDS = runtimeAgentIdSchema.options;
@@ -480,7 +480,7 @@ async function createTask(input: {
 	baseRef?: string;
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
-	autoReviewMode?: "commit" | "pr";
+	autoReviewMode?: "commit" | "pr" | "done";
 	agentId?: RuntimeAgentId;
 	clineSettings?: RuntimeTaskClineSettings;
 }): Promise<JsonRecord> {
@@ -540,7 +540,7 @@ async function updateTaskCommand(input: {
 	baseRef?: string;
 	startInPlanMode?: boolean;
 	autoReviewEnabled?: boolean;
-	autoReviewMode?: "commit" | "pr";
+	autoReviewMode?: "commit" | "pr" | "done";
 	agentId?: RuntimeAgentId | null;
 	clineProviderId?: string | null;
 	clineModelId?: string | null;
@@ -1124,7 +1124,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--base-ref <branch>", "Task base branch/ref.")
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
-		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
+		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr | done.", parseAutoReviewMode)
 		.option("--agent-id <id>", "Agent override: cline | claude | codex | droid | gemini | opencode | default.")
 		.option(
 			"--cline-provider <id>",
@@ -1146,7 +1146,7 @@ export function registerTaskCommand(program: Command): void {
 				baseRef?: string;
 				startInPlanMode?: unknown;
 				autoReviewEnabled?: unknown;
-				autoReviewMode?: "commit" | "pr";
+				autoReviewMode?: "commit" | "pr" | "done";
 				agentId?: string;
 				clineProvider?: string;
 				clineModel?: string;
@@ -1184,7 +1184,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--base-ref <branch>", "Replacement base branch/ref.")
 		.option("--start-in-plan-mode [value]", "Set plan mode (true|false). Flag-only implies true.")
 		.option("--auto-review-enabled [value]", "Enable auto-review behavior (true|false). Flag-only implies true.")
-		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr.", parseAutoReviewMode)
+		.option("--auto-review-mode <mode>", "Auto-review mode: commit | pr | done.", parseAutoReviewMode)
 		.option(
 			"--agent-id <id>",
 			'Agent override: cline | claude | codex | droid | gemini | opencode. Use "default" to clear.',
@@ -1207,7 +1207,7 @@ export function registerTaskCommand(program: Command): void {
 				baseRef?: string;
 				startInPlanMode?: unknown;
 				autoReviewEnabled?: unknown;
-				autoReviewMode?: "commit" | "pr";
+				autoReviewMode?: "commit" | "pr" | "done";
 				agentId?: string;
 				clineProvider?: string;
 				clineModel?: string;

@@ -90,9 +90,9 @@ export const runtimeBoardColumnIdSchema = z.preprocess(
 );
 export type RuntimeBoardColumnId = z.infer<typeof runtimeBoardColumnIdEnum>;
 
-const runtimeTaskAutoReviewModeEnum = z.enum(["commit", "pr"]);
+const runtimeTaskAutoReviewModeEnum = z.enum(["commit", "pr", "done"]);
 export const runtimeTaskAutoReviewModeSchema = z.preprocess(
-	(val) => (val === "move_to_trash" || val === "move_to_done" ? "commit" : val),
+	(val) => (val === "move_to_trash" || val === "move_to_done" ? "done" : val),
 	runtimeTaskAutoReviewModeEnum,
 );
 export type RuntimeTaskAutoReviewMode = z.infer<typeof runtimeTaskAutoReviewModeEnum>;

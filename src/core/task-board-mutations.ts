@@ -37,7 +37,7 @@ export interface RuntimeUpdateTaskInput {
 }
 
 function normalizeTaskAutoReviewMode(value: RuntimeTaskAutoReviewMode | null | undefined): RuntimeTaskAutoReviewMode {
-	if (value === "pr") {
+	if (value === "pr" || value === "done") {
 		return value;
 	}
 	return "commit";
