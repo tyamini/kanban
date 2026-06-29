@@ -547,6 +547,7 @@ export function useBoardInteractions({
 
 	useReviewAutoActions({
 		board,
+		sessions,
 		taskGitActionLoadingByTaskId,
 		runAutoReviewGitAction,
 		requestMoveTaskToTrash: requestMoveTaskToTrashWithAnimation,

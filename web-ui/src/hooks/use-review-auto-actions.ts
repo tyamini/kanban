@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { findCardSelection } from "@/state/board-state";
 import { getTaskWorkspaceSnapshot, subscribeToAnyTaskMetadata } from "@/stores/workspace-metadata-store";
 import type { BoardCard, BoardColumnId, BoardData, TaskAutoReviewMode } from "@/types";
@@ -10,6 +11,34 @@ const AUTO_REVIEW_ACTION_DELAY_MS = 500;
 
 function isTaskAutoReviewEnabled(task: BoardCard): boolean {
 	return task.autoReviewEnabled === true;
+}
+
+// A task lands in review for several reasons. When the agent paused to wait for
+// the user — asking a question or requesting permission — the task is NOT
+// finished, it is blocked, so auto-review must leave it in review instead of
+// committing/PRing/moving it to done behind the user's back.
+//
+// This manifests differently per agent, so we check every known signal on the
+// latest hook activity:
+//   - notificationType "user_attention": native Cline ask_followup_question /
+//     plan_mode_respond.
+//   - notificationType "permission_prompt" / "permission.asked": permission prompts.
+//   - activityText "Waiting for approval": Claude Code PermissionRequest hooks
+//     (incl. the AskUserQuestion tool) and codex approval requests, which leave
+//     notificationType null.
+// We read the *latest* activity, so once the user responds and the agent moves
+// on (PostToolUse / Stop / Final) the task is no longer considered blocked.
+const USER_RESPONSE_NOTIFICATION_TYPES = new Set(["user_attention", "permission_prompt", "permission.asked"]);
+
+function isTaskAwaitingUserResponse(summary: RuntimeTaskSessionSummary | undefined): boolean {
+	const activity = summary?.latestHookActivity;
+	if (!activity) {
+		return false;
+	}
+	if (activity.notificationType && USER_RESPONSE_NOTIFICATION_TYPES.has(activity.notificationType)) {
+		return true;
+	}
+	return activity.activityText?.trim().startsWith("Waiting for approval") === true;
 }
 
 interface TaskGitActionLoadingStateLike {
@@ -23,6 +52,7 @@ interface RequestMoveTaskToTrashOptions {
 
 interface UseReviewAutoActionsOptions {
 	board: BoardData;
+	sessions: Record<string, RuntimeTaskSessionSummary>;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 	requestMoveTaskToTrash: (
@@ -35,12 +65,14 @@ interface UseReviewAutoActionsOptions {
 
 export function useReviewAutoActions({
 	board,
+	sessions,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 	requestMoveTaskToTrash,
 	resetKey,
 }: UseReviewAutoActionsOptions): void {
 	const boardRef = useRef<BoardData>(board);
+	const sessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>(sessions);
 	const runAutoReviewGitActionRef = useRef(runAutoReviewGitAction);
 	const requestMoveTaskToTrashRef = useRef(requestMoveTaskToTrash);
 	const awaitingCleanActionByTaskIdRef = useRef<Record<string, TaskGitAction>>({});
@@ -52,6 +84,10 @@ export function useReviewAutoActions({
 	useEffect(() => {
 		boardRef.current = board;
 	}, [board]);
+
+	useEffect(() => {
+		sessionsRef.current = sessions;
+	}, [sessions]);
 
 	useEffect(() => {
 		runAutoReviewGitActionRef.current = runAutoReviewGitAction;
@@ -155,6 +191,14 @@ export function useReviewAutoActions({
 
 				const autoReviewMode = resolveTaskAutoReviewMode(reviewTask.autoReviewMode);
 
+				// A task paused on a question or permission prompt is blocked, not finished.
+				// Leave it in review (and cancel any pending auto action) until the user
+				// responds and the agent either resumes or genuinely completes.
+				if (isTaskAwaitingUserResponse(sessionsRef.current[reviewTask.id])) {
+					clearAutoReviewTimer(reviewTask.id);
+					continue;
+				}
+
 				if (autoReviewMode === "done") {
 					if (!moveToTrashInFlightTaskIdsRef.current.has(reviewTask.id)) {
 						scheduleAutoReviewAction(reviewTask.id, "done", () => {
@@ -254,7 +298,7 @@ export function useReviewAutoActions({
 		evaluateAutoReview({
 			source: "board_or_loading_change",
 		});
-	}, [board, evaluateAutoReview, taskGitActionLoadingByTaskId]);
+	}, [board, sessions, evaluateAutoReview, taskGitActionLoadingByTaskId]);
 
 	useEffect(() => {
 		return subscribeToAnyTaskMetadata((taskId) => {
