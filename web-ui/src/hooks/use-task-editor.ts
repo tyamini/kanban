@@ -275,7 +275,15 @@ export function useTaskEditor({
 
 		setBoard((currentBoard) => {
 			const currentCard = currentBoard.columns.flatMap((c) => c.cards).find((c) => c.id === savedTaskId);
-			const title = currentCard?.title ?? "";
+			// The inline editor has no title field — the title auto-derives from the prompt.
+			// Re-derive it when the prompt changes, unless the user set a custom title (one
+			// that differs from what the previous prompt would derive), which we preserve.
+			const currentTitle = currentCard?.title ?? "";
+			const hasCustomTitle =
+				currentCard !== undefined &&
+				currentTitle !== "" &&
+				currentTitle !== deriveTaskTitleFromPrompt(currentCard.prompt);
+			const title = hasCustomTitle ? currentTitle : deriveTaskTitleFromPrompt(prompt);
 			const updated = updateTask(currentBoard, savedTaskId, {
 				title,
 				prompt,

@@ -213,7 +213,51 @@ describe("useTaskEditor", () => {
 
 		expect(savedTaskId).toBe("task-1");
 		expect(requireSnapshot(latestSnapshot).editingTaskId).toBeNull();
-		expect(requireSnapshot(latestSnapshot).board.columns[0]?.cards[0]?.prompt).toBe("Updated prompt");
+		const savedCard = requireSnapshot(latestSnapshot).board.columns[0]?.cards[0];
+		expect(savedCard?.prompt).toBe("Updated prompt");
+		// Auto-derived title re-derives from the new prompt.
+		expect(savedCard?.title).toBe("Updated prompt");
+	});
+
+	it("preserves a custom title when the prompt is edited", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const initialBoard = createBoard([createTask("task-1", "Initial prompt", 1)]);
+		// Simulate a user-renamed (custom) title that differs from the derived prompt title.
+		const backlog = initialBoard.columns[0];
+		if (backlog?.cards[0]) {
+			backlog.cards[0] = { ...backlog.cards[0], title: "My custom title" };
+		}
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					initialBoard={initialBoard}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const initialSnapshot = requireSnapshot(latestSnapshot);
+		const task = initialSnapshot.board.columns[0]?.cards[0];
+		if (!task) {
+			throw new Error("Expected a backlog task.");
+		}
+
+		await act(async () => {
+			initialSnapshot.handleOpenEditTask(task);
+		});
+		await act(async () => {
+			latestSnapshot?.setEditTaskPrompt("Updated prompt");
+		});
+		await act(async () => {
+			latestSnapshot?.handleSaveEditedTask();
+		});
+
+		const savedCard = requireSnapshot(latestSnapshot).board.columns[0]?.cards[0];
+		expect(savedCard?.prompt).toBe("Updated prompt");
+		expect(savedCard?.title).toBe("My custom title");
 	});
 
 	it("does not disable start in plan mode when auto review is enabled while editing", async () => {
