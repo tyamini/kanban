@@ -60,10 +60,10 @@ export interface BoardColumn {
 export type TaskHandoffMode = RuntimeTaskHandoffMode;
 export type TaskHandoff = RuntimeTaskHandoff;
 
-export const DEFAULT_TASK_HANDOFF_MODE: TaskHandoffMode = "summary";
+export const DEFAULT_TASK_HANDOFF_MODE: TaskHandoffMode = "none";
 
 export function resolveTaskHandoffMode(mode: TaskHandoffMode | null | undefined): TaskHandoffMode {
-	if (mode === "template" || mode === "none") {
+	if (mode === "summary" || mode === "template" || mode === "none") {
 		return mode;
 	}
 	return DEFAULT_TASK_HANDOFF_MODE;

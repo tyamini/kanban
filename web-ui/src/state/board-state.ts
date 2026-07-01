@@ -256,7 +256,7 @@ function normalizeHandoff(rawHandoff: unknown): TaskHandoff | null {
 	}
 	const handoff = rawHandoff as { mode?: unknown; template?: unknown };
 	const mode =
-		handoff.mode === "summary" || handoff.mode === "template" || handoff.mode === "none" ? handoff.mode : "summary";
+		handoff.mode === "summary" || handoff.mode === "template" || handoff.mode === "none" ? handoff.mode : "none";
 	const template = typeof handoff.template === "string" ? handoff.template : undefined;
 	return { mode, ...(template !== undefined ? { template } : {}) };
 }

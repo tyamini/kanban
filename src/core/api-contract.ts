@@ -189,7 +189,7 @@ export const runtimeTaskHandoffModeSchema = z.enum(["summary", "template", "none
 export type RuntimeTaskHandoffMode = z.infer<typeof runtimeTaskHandoffModeSchema>;
 
 export const runtimeTaskHandoffSchema = z.object({
-	mode: runtimeTaskHandoffModeSchema.default("summary"),
+	mode: runtimeTaskHandoffModeSchema.default("none"),
 	template: z.string().optional(),
 });
 export type RuntimeTaskHandoff = z.infer<typeof runtimeTaskHandoffSchema>;

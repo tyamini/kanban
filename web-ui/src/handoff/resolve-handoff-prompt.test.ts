@@ -24,11 +24,22 @@ function makeSummary(finalMessage: string | undefined): RuntimeTaskSessionSummar
 const upstream = makeCard({ id: "up", title: "Open PR" });
 
 describe("resolveHandoffPrompt", () => {
-	it("defaults to summary mode and prepends a context block", () => {
+	it("defaults to none (base prompt unchanged) when no handoff is configured", () => {
 		const result = resolveHandoffPrompt({
 			downstream: makeCard({ prompt: "review the PR" }),
 			upstream,
 			handoff: undefined,
+			upstreamSummary: makeSummary("PR ready at https://example.com/pr/1"),
+			upstreamWorkspace: null,
+		});
+		expect(result).toBe("review the PR");
+	});
+
+	it("prepends a context block in summary mode", () => {
+		const result = resolveHandoffPrompt({
+			downstream: makeCard({ prompt: "review the PR" }),
+			upstream,
+			handoff: { mode: "summary" },
 			upstreamSummary: makeSummary("PR ready at https://example.com/pr/1"),
 			upstreamWorkspace: null,
 		});

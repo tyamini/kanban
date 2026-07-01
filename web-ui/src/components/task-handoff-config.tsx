@@ -14,9 +14,9 @@ import {
 } from "@/types";
 
 const MODE_OPTIONS: Array<{ value: TaskHandoffMode; label: string; hint: string }> = [
+	{ value: "none", label: "None", hint: "Start with this task's own prompt only." },
 	{ value: "summary", label: "Append summary", hint: "Prepend the upstream agent's final message." },
 	{ value: "template", label: "Custom template", hint: "Write your own prompt with {{from.*}} variables." },
-	{ value: "none", label: "None", hint: "Start with this task's own prompt only." },
 ];
 
 const DEFAULT_TEMPLATE = "Review the upstream result:\n{{from.summary}}\n\nPR: {{from.pr_url}}";
@@ -50,8 +50,8 @@ export function TaskHandoffConfig({
 	});
 
 	const setMode = (nextMode: TaskHandoffMode) => {
-		if (nextMode === "summary") {
-			// summary is the default; omit the field entirely to keep board state tidy
+		if (nextMode === "none") {
+			// none is the default; omit the field entirely to keep board state tidy
 			onChange(dependency.id, undefined);
 			return;
 		}
