@@ -96,7 +96,14 @@ export function KanbanBoard({
 		useState<ProgrammaticCardMoveInFlight | null>(null);
 	const dependencyLinking = useDependencyLinking({
 		canLinkTasks: (fromTaskId, toTaskId) => canCreateTaskDependency(data, fromTaskId, toTaskId),
-		onCreateDependency,
+		// The user drags in execution order: from the task that runs FIRST (drag start)
+		// to the task that runs SECOND (drag release). The dependency edge stores the
+		// producer as `toTaskId` (runs first) and the auto-started consumer as
+		// `fromTaskId` (runs second), so map drag-start -> toTaskId and drag-end ->
+		// fromTaskId by swapping the arguments.
+		onCreateDependency: onCreateDependency
+			? (dragStartTaskId, dragEndTaskId) => onCreateDependency(dragEndTaskId, dragStartTaskId)
+			: undefined,
 	});
 
 	useEffect(() => {

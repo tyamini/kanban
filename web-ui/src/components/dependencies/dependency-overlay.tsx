@@ -662,8 +662,14 @@ export function DependencyOverlay({
 
 		const candidates = Array.from(displayedDependencies.values())
 			.map(({ dependency, isTransient }) => {
-				const sourceAnchor = layout.anchors[dependency.fromTaskId];
-				const targetAnchor = layout.anchors[dependency.toTaskId];
+				// The arrow points in EXECUTION order: the producer (`toTaskId`, which
+				// runs/finishes first and triggers the link) is the source, and the
+				// consumer (`fromTaskId`, auto-started afterwards) is the target — so the
+				// arrowhead lands on the task that runs second (A -> B).
+				const sourceTaskId = dependency.toTaskId;
+				const targetTaskId = dependency.fromTaskId;
+				const sourceAnchor = layout.anchors[sourceTaskId];
+				const targetAnchor = layout.anchors[targetTaskId];
 				if (!sourceAnchor || !targetAnchor) {
 					return null;
 				}
@@ -679,6 +685,8 @@ export function DependencyOverlay({
 				}
 				return {
 					dependency,
+					sourceTaskId,
+					targetTaskId,
 					sourceAnchor,
 					targetAnchor,
 					isTransient,
@@ -689,6 +697,8 @@ export function DependencyOverlay({
 					candidate,
 				): candidate is {
 					dependency: BoardDependency;
+					sourceTaskId: string;
+					targetTaskId: string;
 					sourceAnchor: TaskAnchor;
 					targetAnchor: TaskAnchor;
 					isTransient: boolean;
@@ -697,19 +707,19 @@ export function DependencyOverlay({
 
 		const laneOrderByTaskId = new Map<string, Array<{ dependencyId: string; oppositeCenterY: number }>>();
 		for (const candidate of candidates) {
-			const sourceLanes = laneOrderByTaskId.get(candidate.dependency.fromTaskId) ?? [];
+			const sourceLanes = laneOrderByTaskId.get(candidate.sourceTaskId) ?? [];
 			sourceLanes.push({
 				dependencyId: candidate.dependency.id,
 				oppositeCenterY: candidate.targetAnchor.centerY,
 			});
-			laneOrderByTaskId.set(candidate.dependency.fromTaskId, sourceLanes);
+			laneOrderByTaskId.set(candidate.sourceTaskId, sourceLanes);
 
-			const targetLanes = laneOrderByTaskId.get(candidate.dependency.toTaskId) ?? [];
+			const targetLanes = laneOrderByTaskId.get(candidate.targetTaskId) ?? [];
 			targetLanes.push({
 				dependencyId: candidate.dependency.id,
 				oppositeCenterY: candidate.sourceAnchor.centerY,
 			});
-			laneOrderByTaskId.set(candidate.dependency.toTaskId, targetLanes);
+			laneOrderByTaskId.set(candidate.targetTaskId, targetLanes);
 		}
 
 		for (const lanes of laneOrderByTaskId.values()) {
@@ -717,10 +727,10 @@ export function DependencyOverlay({
 		}
 
 		return candidates.map((candidate) => {
-			const sourceLanes = laneOrderByTaskId.get(candidate.dependency.fromTaskId) ?? [
+			const sourceLanes = laneOrderByTaskId.get(candidate.sourceTaskId) ?? [
 				{ dependencyId: candidate.dependency.id, oppositeCenterY: candidate.targetAnchor.centerY },
 			];
-			const targetLanes = laneOrderByTaskId.get(candidate.dependency.toTaskId) ?? [
+			const targetLanes = laneOrderByTaskId.get(candidate.targetTaskId) ?? [
 				{ dependencyId: candidate.dependency.id, oppositeCenterY: candidate.sourceAnchor.centerY },
 			];
 			const sourceLaneIndex = sourceLanes.findIndex((lane) => lane.dependencyId === candidate.dependency.id);
