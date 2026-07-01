@@ -227,8 +227,10 @@ export function useReviewAutoActions({
 
 				// Commit/PR automation mental model:
 				// - A task is only "armed" for auto-done after we actually see working changes in review and trigger commit/pr.
-				// - Review entries with zero changes (common during start-in-plan-mode planning loops) are intentionally ignored.
 				// - Once armed, a later review state with zero changes is treated as commit/pr success, then we auto-move to done.
+				// - In commit mode, a finished review with a *confirmed* zero changes (nothing to commit) is a genuine
+				//   no-op and is moved straight to Done. Plan-mode / question reviews are already held by the
+				//   awaiting-response check above, so they never reach this point.
 				const changedFiles = getTaskWorkspaceSnapshot(reviewTask.id)?.changedFiles;
 				const awaitingAction = awaitingCleanActionByTaskIdRef.current[reviewTask.id] ?? null;
 				if (awaitingAction) {
@@ -262,6 +264,37 @@ export function useReviewAutoActions({
 					} else {
 						clearAutoReviewTimer(reviewTask.id);
 					}
+					continue;
+				}
+
+				// Commit mode finished with nothing to commit: move it to Done (a confirmed 0,
+				// not a still-loading snapshot). The worktree is preserved on move-to-Done, so
+				// this is safe and reversible. PR mode is intentionally excluded: a clean tree
+				// there may still need a PR opened from already-committed work.
+				if (
+					autoReviewMode === "commit" &&
+					changedFiles === 0 &&
+					!isGitActionInFlight &&
+					!moveToTrashInFlightTaskIdsRef.current.has(reviewTask.id)
+				) {
+					scheduleAutoReviewAction(reviewTask.id, "move_to_done_after_git_action", () => {
+						const latestSelection = findCardSelection(boardRef.current, reviewTask.id);
+						if (!latestSelection || latestSelection.column.id !== "review") {
+							return;
+						}
+						if (!isTaskAutoReviewEnabled(latestSelection.card)) {
+							return;
+						}
+						if (resolveTaskAutoReviewMode(latestSelection.card.autoReviewMode) !== autoReviewMode) {
+							return;
+						}
+						moveToTrashInFlightTaskIdsRef.current.add(reviewTask.id);
+						void requestMoveTaskToTrashRef
+							.current(reviewTask.id, "review", { skipWorkingChangeWarning: true })
+							.finally(() => {
+								moveToTrashInFlightTaskIdsRef.current.delete(reviewTask.id);
+							});
+					});
 					continue;
 				}
 

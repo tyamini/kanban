@@ -106,15 +106,19 @@ const workspaceSnapshots: Record<string, ReviewTaskWorkspaceSnapshot> = {
 function HookHarness({
 	board,
 	sessions = {},
+	changedFiles = 3,
 	runAutoReviewGitAction,
 	requestMoveTaskToTrash,
 }: {
 	board: BoardData;
 	sessions?: Record<string, RuntimeTaskSessionSummary>;
+	/** Override the task-1 workspace changedFiles. null = no snapshot loaded yet. */
+	changedFiles?: number | null;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 	requestMoveTaskToTrash: (taskId: string, fromColumnId: BoardColumnId) => Promise<void>;
 }): null {
-	setTaskWorkspaceSnapshot(workspaceSnapshots["task-1"] ?? null);
+	const baseSnapshot = workspaceSnapshots["task-1"] ?? null;
+	setTaskWorkspaceSnapshot(changedFiles === null || !baseSnapshot ? null : { ...baseSnapshot, changedFiles });
 	useReviewAutoActions({
 		board,
 		sessions,
@@ -265,6 +269,79 @@ describe("useReviewAutoActions", () => {
 				<HookHarness
 					board={createBoard(true, "commit")}
 					sessions={createUserAttentionSessions()}
+					runAutoReviewGitAction={runAutoReviewGitAction}
+					requestMoveTaskToTrash={requestMoveTaskToTrash}
+				/>,
+			);
+		});
+
+		await act(async () => {
+			vi.advanceTimersByTime(1000);
+		});
+
+		expect(runAutoReviewGitAction).not.toHaveBeenCalled();
+		expect(requestMoveTaskToTrash).not.toHaveBeenCalled();
+	});
+
+	it("auto-moves a finished 'commit' task with no changes straight to Done", async () => {
+		const runAutoReviewGitAction = vi.fn(async () => true);
+		const requestMoveTaskToTrash = vi.fn(async () => {});
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={createBoard(true, "commit")}
+					sessions={{ "task-1": createSessionSummary() }}
+					changedFiles={0}
+					runAutoReviewGitAction={runAutoReviewGitAction}
+					requestMoveTaskToTrash={requestMoveTaskToTrash}
+				/>,
+			);
+		});
+
+		await act(async () => {
+			vi.advanceTimersByTime(1000);
+		});
+
+		// Nothing to commit -> move to Done, without running a git action.
+		expect(runAutoReviewGitAction).not.toHaveBeenCalled();
+		expect(requestMoveTaskToTrash).toHaveBeenCalledWith("task-1", "review", { skipWorkingChangeWarning: true });
+	});
+
+	it("does not auto-move a 'pr' task with no changes to Done (a PR may still be needed)", async () => {
+		const runAutoReviewGitAction = vi.fn(async () => true);
+		const requestMoveTaskToTrash = vi.fn(async () => {});
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={createBoard(true, "pr")}
+					sessions={{ "task-1": createSessionSummary() }}
+					changedFiles={0}
+					runAutoReviewGitAction={runAutoReviewGitAction}
+					requestMoveTaskToTrash={requestMoveTaskToTrash}
+				/>,
+			);
+		});
+
+		await act(async () => {
+			vi.advanceTimersByTime(1000);
+		});
+
+		expect(runAutoReviewGitAction).not.toHaveBeenCalled();
+		expect(requestMoveTaskToTrash).not.toHaveBeenCalled();
+	});
+
+	it("does not move a 'commit' task to Done while its workspace snapshot is still loading", async () => {
+		const runAutoReviewGitAction = vi.fn(async () => true);
+		const requestMoveTaskToTrash = vi.fn(async () => {});
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={createBoard(true, "commit")}
+					sessions={{ "task-1": createSessionSummary() }}
+					changedFiles={null}
 					runAutoReviewGitAction={runAutoReviewGitAction}
 					requestMoveTaskToTrash={requestMoveTaskToTrash}
 				/>,
