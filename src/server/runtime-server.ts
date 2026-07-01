@@ -45,6 +45,7 @@ import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
+import { ensureProjectSkillLinks } from "./kanban-skills";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import type { WorkspaceRegistry } from "./workspace-registry";
@@ -229,6 +230,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				summarizeProjectTaskCounts: deps.workspaceRegistry.summarizeProjectTaskCounts,
 				createProjectSummary: deps.workspaceRegistry.createProjectSummary,
 				broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
+				ensureProjectSkillLinks,
 				getTerminalManagerForWorkspace: deps.workspaceRegistry.getTerminalManagerForWorkspace,
 				disposeWorkspace: (workspaceId, options) => {
 					disposeClineTaskSessionService(workspaceId);

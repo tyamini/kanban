@@ -38,6 +38,7 @@ function createDefaultDeps(serverCwd: string): CreateProjectsApiDependencies {
 			taskCounts: { backlog: 0, in_progress: 0, review: 0, trash: 0 },
 		})),
 		broadcastRuntimeProjectsUpdated: vi.fn(),
+		ensureProjectSkillLinks: vi.fn(async () => {}),
 		getTerminalManagerForWorkspace: vi.fn(() => null),
 		disposeWorkspace: vi.fn(() => ({
 			terminalManager: null as TerminalSessionManager | null,

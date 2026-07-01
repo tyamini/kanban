@@ -1,3 +1,5 @@
+import { buildShellCommandLine } from "./shell";
+
 export interface RuntimeInvocationContext {
 	execPath: string;
 	argv: string[];
@@ -63,4 +65,20 @@ export function buildKanbanCommandParts(
 	},
 ): string[] {
 	return [...resolveKanbanCommandParts(context), ...args];
+}
+
+/**
+ * The kanban CLI as a single shell command line (e.g. `node /path/dist/cli.js`
+ * or `kanban`). Injected into agent sessions as KANBAN_CLI so skills/agents can
+ * invoke the CLI regardless of how Kanban itself was launched.
+ */
+export function resolveKanbanCommandLine(
+	context: RuntimeInvocationContext = {
+		execPath: process.execPath,
+		argv: process.argv,
+		execArgv: process.execArgv,
+	},
+): string {
+	const parts = resolveKanbanCommandParts(context);
+	return buildShellCommandLine(parts[0] ?? "kanban", parts.slice(1));
 }

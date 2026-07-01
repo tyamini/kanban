@@ -425,6 +425,10 @@ async function startServer(): Promise<{
 		runtimeHub.trackTerminalManager(workspaceId, terminalManager);
 	}
 
+	// Best-effort: symlink the canonical Kanban skills into every known project's
+	// .claude/skills so task agents can opt into createTask/linkTasks workflows.
+	void import("./server/kanban-skills.js").then(({ backfillProjectSkillLinks }) => backfillProjectSkillLinks());
+
 	const disposeTrackedWorkspace = (
 		workspaceId: string,
 		options?: {

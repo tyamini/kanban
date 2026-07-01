@@ -38,6 +38,7 @@
   "files": [
     "dist",
     "man",
+    "skills",
     "README.md",
     "LICENSE"
   ],

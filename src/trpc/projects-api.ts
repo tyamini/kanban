@@ -43,6 +43,8 @@ export interface CreateProjectsApiDependencies {
 		taskCounts: RuntimeProjectTaskCounts;
 	}) => RuntimeProjectSummary;
 	broadcastRuntimeProjectsUpdated: (preferredCurrentProjectId: string | null) => Promise<void> | void;
+	/** Symlinks the canonical Kanban skills into the project's .claude/skills (best-effort). */
+	ensureProjectSkillLinks: (repoPath: string) => Promise<void>;
 	getTerminalManagerForWorkspace: (workspaceId: string) => TerminalSessionManager | null;
 	disposeWorkspace: (
 		workspaceId: string,
@@ -128,6 +130,7 @@ export function createProjectsApi(deps: CreateProjectsApiDependencies): RuntimeT
 				}
 				const context = await loadWorkspaceContext(projectPath);
 				deps.rememberWorkspace(context.workspaceId, context.repoPath);
+				await deps.ensureProjectSkillLinks(context.repoPath);
 				const projectsAfterAdd = await listWorkspaceIndexEntries();
 				const activeWorkspaceId = deps.getActiveWorkspaceId();
 				const hasActiveWorkspace = activeWorkspaceId
