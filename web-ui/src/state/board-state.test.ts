@@ -102,7 +102,7 @@ describe("board dependency state", () => {
 		expect(sameTask.reason).toBe("same_task");
 	});
 
-	it("preserves backlog-to-backlog link order and reorients it when one task starts", () => {
+	it("keeps a backlog-to-backlog link's direction stable when one task starts", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
@@ -114,12 +114,16 @@ describe("board dependency state", () => {
 			toTaskId: taskB,
 		});
 
+		// Starting one task must NOT flip the edge: the execution order set at link
+		// time is stable, so `toTaskId` remains the producer and `fromTaskId` the
+		// auto-started consumer. (Previously this reoriented, which made links fire
+		// in both directions.)
 		const movedA = moveTaskToColumn(bothBacklog.board, taskA, "in_progress");
 		expect(movedA.moved).toBe(true);
 		expect(movedA.board.dependencies).toEqual([
 			expect.objectContaining({
-				fromTaskId: taskB,
-				toTaskId: taskA,
+				fromTaskId: taskA,
+				toTaskId: taskB,
 			}),
 		]);
 	});
@@ -137,6 +141,26 @@ describe("board dependency state", () => {
 			expect.objectContaining({ fromTaskId: taskA, toTaskId: taskB }),
 			expect.objectContaining({ fromTaskId: taskB, toTaskId: taskA }),
 		]);
+	});
+
+	it("auto-starts only in the link direction (finishing the consumer does not start the producer)", () => {
+		const fixture = createBacklogBoard(["Task A", "Task B"]);
+		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
+		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
+
+		// Link so A runs first (producer) and B second (consumer): to = producer, from = consumer.
+		const linked = addTaskDependency(fixture.board, taskB, taskA);
+		expect(linked.dependency).toMatchObject({ fromTaskId: taskB, toTaskId: taskA });
+
+		// Finishing the CONSUMER (B) first must NOT ready the producer (A).
+		const bToReview = moveTaskToColumn(linked.board, taskB, "review");
+		const consumerFinished = trashTaskAndGetReadyLinkedTaskIds(bToReview.board, taskB);
+		expect(consumerFinished.readyTaskIds).toEqual([]);
+
+		// Finishing the PRODUCER (A) readies the consumer (B).
+		const aToReview = moveTaskToColumn(linked.board, taskA, "review");
+		const producerFinished = trashTaskAndGetReadyLinkedTaskIds(aToReview.board, taskA);
+		expect(producerFinished.readyTaskIds).toEqual([taskB]);
 	});
 
 	it("only unlocks backlog cards when a review card is trashed", () => {
@@ -561,7 +585,10 @@ describe("board dependency state", () => {
 
 		const normalized = normalizeBoardData(rawBoard);
 		expect(normalized).not.toBeNull();
+		// Direction is preserved as stored (no column-based flipping); only exact
+		// duplicate directed edges (dep-4) and edges to missing tasks (dep-6) are dropped.
 		expect(normalized?.dependencies.map((dependency) => `${dependency.fromTaskId}->${dependency.toTaskId}`)).toEqual([
+			"a->b",
 			"b->a",
 			"c->a",
 			"b->c",

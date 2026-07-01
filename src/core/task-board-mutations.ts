@@ -259,6 +259,13 @@ function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 	return [...readyTaskIds];
 }
 
+// Prunes invalid dependency edges as the board changes, WITHOUT changing their
+// direction. The direction (`toTaskId` = producer that runs first, `fromTaskId` =
+// consumer that auto-starts afterwards) is fixed when the link is created and must
+// stay stable — otherwise starting the consumer first would flip the edge and make
+// the producer auto-start too (links would fire in both directions). We only drop
+// edges that reference a missing task, a self-link, a Done/trashed task, or a
+// duplicate pair; the edge objects themselves are preserved as-is.
 export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardData {
 	if (board.dependencies.length === 0) {
 		return board;
@@ -267,42 +274,35 @@ export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardDat
 	const dependencies: RuntimeBoardDependency[] = [];
 	const existingPairs = new Set<string>();
 	for (const dependency of board.dependencies) {
-		const firstTaskId = dependency.fromTaskId.trim();
-		const secondTaskId = dependency.toTaskId.trim();
-		if (!firstTaskId || !secondTaskId || firstTaskId === secondTaskId) {
+		const fromTaskId = dependency.fromTaskId.trim();
+		const toTaskId = dependency.toTaskId.trim();
+		if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) {
 			continue;
 		}
-		if (!taskIds.has(firstTaskId) || !taskIds.has(secondTaskId)) {
+		if (!taskIds.has(fromTaskId) || !taskIds.has(toTaskId)) {
 			continue;
 		}
-		const resolved = resolveDependencyEndpoints(board, firstTaskId, secondTaskId);
-		if ("reason" in resolved) {
+		const fromColumnId = getTaskColumnId(board, fromTaskId);
+		const toColumnId = getTaskColumnId(board, toTaskId);
+		// Links to a Done/trashed task are discarded (matches move-to-Done behavior).
+		if (fromColumnId === "trash" || toColumnId === "trash") {
 			continue;
 		}
-		const pairKey = createDependencyPairKey(resolved.backlogTaskId, resolved.linkedTaskId);
+		// Drop dead links: once neither endpoint is in the backlog, nothing can be
+		// auto-started, so the edge is meaningless.
+		if (fromColumnId !== "backlog" && toColumnId !== "backlog") {
+			continue;
+		}
+		const pairKey = createDependencyPairKey(fromTaskId, toTaskId);
 		if (existingPairs.has(pairKey)) {
 			continue;
 		}
 		existingPairs.add(pairKey);
-		dependencies.push({
-			id: dependency.id,
-			fromTaskId: resolved.backlogTaskId,
-			toTaskId: resolved.linkedTaskId,
-			createdAt: dependency.createdAt,
-		});
+		dependencies.push(dependency);
 	}
 	if (
 		dependencies.length === board.dependencies.length &&
-		dependencies.every((dependency, index) => {
-			const current = board.dependencies[index];
-			return (
-				current &&
-				current.id === dependency.id &&
-				current.fromTaskId === dependency.fromTaskId &&
-				current.toTaskId === dependency.toTaskId &&
-				current.createdAt === dependency.createdAt
-			);
-		})
+		dependencies.every((dependency, index) => dependency === board.dependencies[index])
 	) {
 		return board;
 	}
