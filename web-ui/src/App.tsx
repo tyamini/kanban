@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddProjectDialog } from "@/components/add-project-dialog";
 import { notifyError, showAppToast } from "@/components/app-toaster";
 import { CardDetailView } from "@/components/card-detail-view";
+import { CatalogPanel } from "@/components/catalog-panel";
 import { ClearTrashDialog } from "@/components/clear-trash-dialog";
 import { DebugDialog } from "@/components/debug-dialog";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
@@ -70,7 +71,15 @@ import { useRuntimeProjectConfig } from "@/runtime/use-runtime-project-config";
 import { useTerminalConnectionReady } from "@/runtime/use-terminal-connection-ready";
 import { useWorkspacePersistence } from "@/runtime/use-workspace-persistence";
 import { saveWorkspaceState } from "@/runtime/workspace-state-query";
-import { applyTaskDetailClineSettingsChange, findCardSelection } from "@/state/board-state";
+import {
+	addCatalogTask,
+	addCatalogTaskToBacklog,
+	applyTaskDetailClineSettingsChange,
+	findCardSelection,
+	removeCatalogTask,
+	type TaskDraft,
+	updateCatalogTask,
+} from "@/state/board-state";
 import {
 	getTaskWorkspaceInfo,
 	getTaskWorkspaceSnapshot,
@@ -764,6 +773,47 @@ export default function App(): ReactElement {
 		[handleCancelCreateTask],
 	);
 
+	const handleCatalogCreate = useCallback(
+		(draft: TaskDraft) => {
+			setBoard((currentBoard) => addCatalogTask(currentBoard, draft).board);
+		},
+		[setBoard],
+	);
+	const handleCatalogUpdate = useCallback(
+		(catalogId: string, draft: TaskDraft) => {
+			setBoard((currentBoard) => updateCatalogTask(currentBoard, catalogId, draft).board);
+		},
+		[setBoard],
+	);
+	const handleCatalogDelete = useCallback(
+		(catalogId: string) => {
+			setBoard((currentBoard) => removeCatalogTask(currentBoard, catalogId).board);
+		},
+		[setBoard],
+	);
+	const handleCatalogAddToBacklog = useCallback(
+		(catalogId: string) => {
+			setBoard((currentBoard) => addCatalogTaskToBacklog(currentBoard, catalogId).board);
+		},
+		[setBoard],
+	);
+	const catalogPanel = (
+		<CatalogPanel
+			catalog={board.catalog}
+			onCreate={handleCatalogCreate}
+			onUpdate={handleCatalogUpdate}
+			onDelete={handleCatalogDelete}
+			onAddToBacklog={handleCatalogAddToBacklog}
+			workspaceId={currentProjectId}
+			branchOptions={createTaskBranchOptions}
+			defaultBranchRef={defaultTaskBranchRef}
+			defaultAgentId={runtimeProjectConfig?.selectedAgentId ?? null}
+			defaultProviderId={defaultTaskClineProviderId}
+			defaultModelId={runtimeProjectConfig?.clineProviderSettings?.modelId ?? null}
+			defaultReasoningEffort={runtimeProjectConfig?.clineProviderSettings?.reasoningEffort ?? null}
+		/>
+	);
+
 	const editingTaskCard = editingTaskId
 		? (board.columns.flatMap((column) => column.cards).find((card) => card.id === editingTaskId) ?? null)
 		: null;
@@ -966,6 +1016,7 @@ export default function App(): ReactElement {
 												onStartTask={handleStartTaskFromBoard}
 												onStartAllTasks={handleStartAllBacklogTasksFromBoard}
 												onClearTrash={handleOpenClearTrash}
+												catalogPanel={catalogPanel}
 												editingTaskId={editingTaskId}
 												inlineTaskEditor={inlineTaskEditor}
 												onEditTask={handleOpenEditTask}

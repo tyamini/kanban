@@ -191,6 +191,7 @@ describe("KanbanBoard", () => {
 				{ id: "trash", title: "Done", cards: [] },
 			],
 			dependencies: [],
+			catalog: [],
 		};
 
 		let requestMove: RequestProgrammaticCardMove | null = null;

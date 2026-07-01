@@ -45,6 +45,7 @@ function createBoard(dependencies: BoardDependency[] = []): BoardData {
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies,
+		catalog: [],
 	};
 }
 

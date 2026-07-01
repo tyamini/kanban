@@ -30,6 +30,7 @@ function createBoard(tasks: BoardCard[] = []): BoardData {
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 

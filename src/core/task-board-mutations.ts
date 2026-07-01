@@ -109,7 +109,39 @@ function collectExistingTaskIds(board: RuntimeBoardData): Set<string> {
 			existingIds.add(card.id);
 		}
 	}
+	// Catalog entries share the task-id namespace so duplicating one into the
+	// backlog (or creating new tasks) never collides with a catalog id.
+	for (const entry of board.catalog ?? []) {
+		existingIds.add(entry.id);
+	}
 	return existingIds;
+}
+
+// Builds a board card from create input, applying the same defaults/cloning used
+// for backlog tasks. Shared by addTaskToColumn and the catalog mutations.
+function buildBoardCard(input: RuntimeCreateTaskInput, id: string, now: number): RuntimeBoardCard {
+	const prompt = input.prompt.trim();
+	if (!prompt) {
+		throw new Error("Task prompt is required.");
+	}
+	const baseRef = input.baseRef.trim();
+	if (!baseRef) {
+		throw new Error("Task baseRef is required.");
+	}
+	return {
+		id,
+		title: resolveTaskTitle(input.title, prompt),
+		prompt,
+		startInPlanMode: Boolean(input.startInPlanMode),
+		autoReviewEnabled: Boolean(input.autoReviewEnabled),
+		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
+		images: cloneTaskImages(input.images),
+		...(input.agentId ? { agentId: input.agentId } : {}),
+		...(input.clineSettings !== undefined ? { clineSettings: cloneTaskClineSettings(input.clineSettings) } : {}),
+		baseRef,
+		createdAt: now,
+		updatedAt: now,
+	};
 }
 
 function collectTaskIds(board: RuntimeBoardData): Set<string> {
@@ -287,33 +319,12 @@ export function addTaskToColumn(
 	randomUuid: () => string,
 	now: number = Date.now(),
 ): RuntimeCreateTaskResult {
-	const prompt = input.prompt.trim();
-	if (!prompt) {
-		throw new Error("Task prompt is required.");
-	}
-	const baseRef = input.baseRef.trim();
-	if (!baseRef) {
-		throw new Error("Task baseRef is required.");
-	}
 	const existingIds = collectExistingTaskIds(board);
 	const explicitTaskId = input.taskId?.trim();
 	if (explicitTaskId && existingIds.has(explicitTaskId)) {
 		throw new Error(`Task "${explicitTaskId}" already exists.`);
 	}
-	const task: RuntimeBoardCard = {
-		id: explicitTaskId || createUniqueTaskId(existingIds, randomUuid),
-		title: resolveTaskTitle(input.title, prompt),
-		prompt,
-		startInPlanMode: Boolean(input.startInPlanMode),
-		autoReviewEnabled: Boolean(input.autoReviewEnabled),
-		autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
-		images: cloneTaskImages(input.images),
-		...(input.agentId ? { agentId: input.agentId } : {}),
-		...(input.clineSettings !== undefined ? { clineSettings: cloneTaskClineSettings(input.clineSettings) } : {}),
-		baseRef,
-		createdAt: now,
-		updatedAt: now,
-	};
+	const task = buildBoardCard(input, explicitTaskId || createUniqueTaskId(existingIds, randomUuid), now);
 
 	const targetColumnIndex = board.columns.findIndex((column) => column.id === columnId);
 	if (targetColumnIndex === -1) {
@@ -685,5 +696,143 @@ export function updateTask(
 		},
 		task: updatedTask,
 		updated: true,
+	};
+}
+
+export interface RuntimeRemoveCatalogTaskResult {
+	board: RuntimeBoardData;
+	removed: boolean;
+}
+
+export interface RuntimeAddCatalogToBacklogResult {
+	board: RuntimeBoardData;
+	task: RuntimeBoardCard | null;
+	added: boolean;
+}
+
+function getBoardCatalog(board: RuntimeBoardData): RuntimeBoardCard[] {
+	return board.catalog ?? [];
+}
+
+// Adds a reusable template to the per-project catalog. Catalog entries live
+// outside the columns, so they are never run, linked, or moved.
+export function addCatalogTask(
+	board: RuntimeBoardData,
+	input: RuntimeCreateTaskInput,
+	randomUuid: () => string,
+	now: number = Date.now(),
+): RuntimeCreateTaskResult {
+	const existingIds = collectExistingTaskIds(board);
+	const explicitTaskId = input.taskId?.trim();
+	if (explicitTaskId && existingIds.has(explicitTaskId)) {
+		throw new Error(`Task "${explicitTaskId}" already exists.`);
+	}
+	const task = buildBoardCard(input, explicitTaskId || createUniqueTaskId(existingIds, randomUuid), now);
+	return {
+		board: {
+			...board,
+			catalog: [task, ...getBoardCatalog(board)],
+		},
+		task,
+	};
+}
+
+export function updateCatalogTask(
+	board: RuntimeBoardData,
+	catalogId: string,
+	input: RuntimeUpdateTaskInput,
+	now: number = Date.now(),
+): RuntimeUpdateTaskResult {
+	const normalizedId = catalogId.trim();
+	const prompt = input.prompt.trim();
+	const baseRef = input.baseRef.trim();
+	if (!normalizedId || !prompt || !baseRef) {
+		return { board, task: null, updated: false };
+	}
+
+	let updatedTask: RuntimeBoardCard | null = null;
+	const catalog = getBoardCatalog(board).map((entry) => {
+		if (entry.id !== normalizedId) {
+			return entry;
+		}
+		updatedTask = {
+			...entry,
+			title: resolveTaskTitle(input.title, prompt),
+			prompt,
+			startInPlanMode: Boolean(input.startInPlanMode),
+			autoReviewEnabled: Boolean(input.autoReviewEnabled),
+			autoReviewMode: normalizeTaskAutoReviewMode(input.autoReviewMode),
+			images: input.images === undefined ? entry.images : cloneTaskImages(input.images),
+			agentId: input.agentId === undefined ? entry.agentId : (input.agentId ?? undefined),
+			clineSettings:
+				input.clineSettings === undefined
+					? cloneTaskClineSettings(entry.clineSettings)
+					: input.clineSettings === null
+						? undefined
+						: cloneTaskClineSettings(input.clineSettings),
+			baseRef,
+			updatedAt: now,
+		};
+		return updatedTask;
+	});
+
+	if (!updatedTask) {
+		return { board, task: null, updated: false };
+	}
+	return {
+		board: { ...board, catalog },
+		task: updatedTask,
+		updated: true,
+	};
+}
+
+export function removeCatalogTask(board: RuntimeBoardData, catalogId: string): RuntimeRemoveCatalogTaskResult {
+	const normalizedId = catalogId.trim();
+	const catalog = getBoardCatalog(board);
+	const nextCatalog = catalog.filter((entry) => entry.id !== normalizedId);
+	if (nextCatalog.length === catalog.length) {
+		return { board, removed: false };
+	}
+	return {
+		board: { ...board, catalog: nextCatalog },
+		removed: true,
+	};
+}
+
+// Duplicates a catalog entry into the backlog as a brand-new task (new id and
+// timestamps). The catalog entry is left untouched.
+export function addCatalogTaskToBacklog(
+	board: RuntimeBoardData,
+	catalogId: string,
+	randomUuid: () => string,
+	now: number = Date.now(),
+): RuntimeAddCatalogToBacklogResult {
+	const entry = getBoardCatalog(board).find((candidate) => candidate.id === catalogId.trim());
+	if (!entry) {
+		return { board, task: null, added: false };
+	}
+	const newId = createUniqueTaskId(collectExistingTaskIds(board), randomUuid);
+	const task = buildBoardCard(
+		{
+			title: entry.title,
+			prompt: entry.prompt,
+			startInPlanMode: entry.startInPlanMode,
+			autoReviewEnabled: entry.autoReviewEnabled,
+			autoReviewMode: entry.autoReviewMode,
+			images: entry.images,
+			agentId: entry.agentId,
+			clineSettings: entry.clineSettings,
+			baseRef: entry.baseRef,
+		},
+		newId,
+		now,
+	);
+	const columns = board.columns.map((column) =>
+		column.id === "backlog" ? { ...column, cards: [task, ...column.cards] } : column,
+	);
+	return {
+		board: { ...board, columns },
+		task,
+		added: true,
 	};
 }

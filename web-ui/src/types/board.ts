@@ -77,9 +77,14 @@ export interface BoardDependency {
 	handoff?: TaskHandoff;
 }
 
+/** A reusable task template stored in the per-project catalog (same shape as a card). */
+export type BoardCatalogEntry = BoardCard;
+
 export interface BoardData {
 	columns: BoardColumn[];
 	dependencies: BoardDependency[];
+	/** Per-project catalog of reusable task templates (inert; never run or linked). */
+	catalog: BoardCatalogEntry[];
 }
 
 export interface ReviewTaskWorkspaceSnapshot {

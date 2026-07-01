@@ -32,6 +32,7 @@ function createBoard(autoReviewEnabled: boolean, autoReviewMode: TaskAutoReviewM
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 

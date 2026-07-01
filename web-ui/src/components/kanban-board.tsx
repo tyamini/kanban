@@ -35,6 +35,7 @@ export function KanbanBoard({
 	onStartTask,
 	onStartAllTasks,
 	onClearTrash,
+	catalogPanel,
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
@@ -62,6 +63,7 @@ export function KanbanBoard({
 	onStartTask?: (taskId: string) => void;
 	onStartAllTasks?: () => void;
 	onClearTrash?: () => void;
+	catalogPanel?: ReactNode;
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCard) => void;
@@ -380,6 +382,7 @@ export function KanbanBoard({
 				className="kb-board kb-dependency-surface"
 				data-programmatic-card-move={programmaticCardMoveInFlight ? "true" : undefined}
 			>
+				{catalogPanel}
 				{data.columns.map((column) => (
 					<BoardColumn
 						key={column.id}

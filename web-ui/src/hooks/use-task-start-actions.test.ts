@@ -35,6 +35,7 @@ describe("getStartableBacklogTaskIds", () => {
 				{ id: "trash", title: "Done", cards: [] },
 			],
 			dependencies,
+			catalog: [],
 		};
 	}
 

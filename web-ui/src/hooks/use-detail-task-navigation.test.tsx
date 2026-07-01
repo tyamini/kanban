@@ -31,6 +31,7 @@ function createBoard(): BoardData {
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 

@@ -11,6 +11,7 @@ export enum LocalStorageKey {
 	DetailExpandedDiffFileTreePanelRatio = "kanban.detail-expanded-diff-file-tree-panel-ratio",
 	ProjectNavigationPanelWidth = "kb-sidebar-width",
 	ProjectNavigationPanelCollapsed = "kanban.project-navigation-panel-collapsed",
+	CatalogPanelCollapsed = "kanban.catalog-panel-collapsed",
 	GitHistoryRefsPanelWidth = "kanban.git-history-refs-panel-width",
 	GitHistoryCommitsPanelWidth = "kanban.git-history-commits-panel-width",
 	GitDiffFileTreePanelRatio = "kanban.git-diff-file-tree-panel-ratio",

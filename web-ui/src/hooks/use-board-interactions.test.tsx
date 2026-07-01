@@ -56,6 +56,7 @@ function createBoard(): BoardData {
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 
@@ -456,6 +457,7 @@ describe("useBoardInteractions", () => {
 				{ id: "trash", title: "Done", cards: [trashTask] },
 			],
 			dependencies: [],
+			catalog: [],
 		};
 		const setBoard = vi.fn<Dispatch<SetStateAction<BoardData>>>((_nextBoard) => {
 			// The optimistic move is not part of this assertion.
@@ -562,6 +564,7 @@ describe("useBoardInteractions", () => {
 				{ id: "trash", title: "Done", cards: [trashTask] },
 			],
 			dependencies: [],
+			catalog: [],
 		};
 		const setBoard = vi.fn<Dispatch<SetStateAction<BoardData>>>((nextBoard) => {
 			if (typeof nextBoard === "function") {
@@ -649,6 +652,7 @@ describe("useBoardInteractions", () => {
 				{ id: "trash", title: "Done", cards: [trashTask] },
 			],
 			dependencies: [],
+			catalog: [],
 		};
 		const setSelectedTaskId = vi.fn<Dispatch<SetStateAction<string | null>>>();
 

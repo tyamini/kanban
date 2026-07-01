@@ -147,6 +147,7 @@ function createEmptyBoard(): RuntimeBoardData {
 			cards: [],
 		})),
 		dependencies: [],
+		catalog: [],
 	};
 }
 

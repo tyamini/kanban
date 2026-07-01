@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import type { RuntimeBoardData } from "../../src/core/api-contract";
 import {
+	addCatalogTask,
+	addCatalogTaskToBacklog,
 	addTaskDependency,
 	addTaskToColumn,
 	deleteTasksFromBoard,
 	moveTaskToColumn,
+	removeCatalogTask,
 	trashTaskAndGetReadyLinkedTaskIds,
+	updateCatalogTask,
 	updateTask,
 	updateTaskDependencyHandoff,
 } from "../../src/core/task-board-mutations";
@@ -20,6 +24,7 @@ function createBoard(): RuntimeBoardData {
 			{ id: "trash", title: "Done", cards: [] },
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 
@@ -313,5 +318,64 @@ describe("per-task agent/model/provider overrides", () => {
 			modelId: "claude-sonnet-4-20250514",
 			reasoningEffort: "high",
 		});
+	});
+});
+
+describe("task catalog", () => {
+	it("adds an entry to the catalog without touching the columns", () => {
+		const result = addCatalogTask(createBoard(), { prompt: "Common chore", baseRef: "main" }, () => "ctlg1");
+		expect(result.board.catalog).toHaveLength(1);
+		expect(result.board.catalog[0]?.id).toBe("ctlg1");
+		expect(result.board.columns.every((column) => column.cards.length === 0)).toBe(true);
+	});
+
+	it("never reuses a catalog id when creating a column task", () => {
+		const withCatalog = addCatalogTask(createBoard(), { prompt: "Template", baseRef: "main" }, () => "dup");
+		const ids = ["dup", "dup", "frsh"];
+		let call = 0;
+		const created = addTaskToColumn(
+			withCatalog.board,
+			"backlog",
+			{ prompt: "Real task", baseRef: "main" },
+			() => ids[call++] ?? "fallback",
+		);
+		// The first two uuids collide with the catalog id, so a unique one is chosen.
+		expect(created.task.id).toBe("frsh");
+	});
+
+	it("duplicates a catalog entry into the backlog with a new id, leaving the entry intact", () => {
+		const withCatalog = addCatalogTask(
+			createBoard(),
+			{ prompt: "Run the linter", baseRef: "main", autoReviewMode: "pr" },
+			() => "ctlgA",
+		);
+		const added = addCatalogTaskToBacklog(withCatalog.board, "ctlgA", () => "bklgA");
+		expect(added.added).toBe(true);
+		expect(added.task?.id).toBe("bklgA");
+		expect(added.task?.prompt).toBe("Run the linter");
+		expect(added.task?.autoReviewMode).toBe("pr");
+		// Catalog entry is unchanged; backlog has the duplicate.
+		expect(added.board.catalog).toHaveLength(1);
+		expect(added.board.catalog[0]?.id).toBe("ctlgA");
+		const backlog = added.board.columns.find((column) => column.id === "backlog");
+		expect(backlog?.cards.map((card) => card.id)).toEqual(["bklgA"]);
+	});
+
+	it("reports added=false for an unknown catalog id", () => {
+		const result = addCatalogTaskToBacklog(createBoard(), "missing", () => "x");
+		expect(result.added).toBe(false);
+		expect(result.task).toBeNull();
+	});
+
+	it("updates and removes catalog entries", () => {
+		const withCatalog = addCatalogTask(createBoard(), { prompt: "Old", baseRef: "main" }, () => "c1");
+		const updated = updateCatalogTask(withCatalog.board, "c1", { prompt: "New prompt", baseRef: "dev" });
+		expect(updated.updated).toBe(true);
+		expect(updated.board.catalog[0]?.prompt).toBe("New prompt");
+		expect(updated.board.catalog[0]?.baseRef).toBe("dev");
+
+		const removed = removeCatalogTask(updated.board, "c1");
+		expect(removed.removed).toBe(true);
+		expect(removed.board.catalog).toHaveLength(0);
 	});
 });

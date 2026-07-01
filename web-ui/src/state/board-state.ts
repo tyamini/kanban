@@ -282,6 +282,7 @@ export function normalizeBoardData(rawBoard: unknown): BoardData | null {
 
 	const candidateColumns = (rawBoard as { columns?: unknown }).columns;
 	const candidateDependencies = (rawBoard as { dependencies?: unknown }).dependencies;
+	const candidateCatalog = (rawBoard as { catalog?: unknown }).catalog;
 	if (!Array.isArray(candidateColumns)) {
 		return null;
 	}
@@ -326,9 +327,20 @@ export function normalizeBoardData(rawBoard: unknown): BoardData | null {
 		}
 	}
 
+	const normalizedCatalog: BoardCard[] = [];
+	if (Array.isArray(candidateCatalog)) {
+		for (const rawEntry of candidateCatalog) {
+			const entry = normalizeCard(rawEntry);
+			if (entry) {
+				normalizedCatalog.push(entry);
+			}
+		}
+	}
+
 	return runtimeTaskState.updateTaskDependencies({
 		columns: normalizedColumns,
 		dependencies: normalizedDependencies,
+		catalog: normalizedCatalog,
 	});
 }
 
@@ -369,6 +381,60 @@ export function addTaskToColumnWithResult(
 		board: result.board,
 		task: result.task,
 	};
+}
+
+export function addCatalogTask(board: BoardData, draft: TaskDraft): { board: BoardData; task: BoardCard } {
+	const prompt = draft.prompt.trim();
+	if (!prompt) {
+		throw new Error("Task prompt is required.");
+	}
+	const result = runtimeTaskState.addCatalogTask(
+		board,
+		{
+			title: draft.title,
+			prompt,
+			startInPlanMode: draft.startInPlanMode,
+			autoReviewEnabled: draft.autoReviewEnabled,
+			autoReviewMode: draft.autoReviewMode,
+			images: draft.images,
+			agentId: draft.agentId,
+			clineSettings: draft.clineSettings,
+			baseRef: draft.baseRef,
+		},
+		createBrowserUuid,
+	);
+	return { board: result.board, task: result.task };
+}
+
+export function updateCatalogTask(
+	board: BoardData,
+	catalogId: string,
+	draft: TaskDraft,
+): { board: BoardData; updated: boolean } {
+	const result = runtimeTaskState.updateCatalogTask(board, catalogId, {
+		title: draft.title,
+		prompt: draft.prompt,
+		startInPlanMode: draft.startInPlanMode,
+		autoReviewEnabled: draft.autoReviewEnabled,
+		autoReviewMode: draft.autoReviewMode,
+		images: draft.images,
+		agentId: draft.agentId,
+		clineSettings: draft.clineSettings,
+		baseRef: draft.baseRef,
+	});
+	return { board: result.board, updated: result.updated };
+}
+
+export function removeCatalogTask(board: BoardData, catalogId: string): { board: BoardData; removed: boolean } {
+	return runtimeTaskState.removeCatalogTask(board, catalogId);
+}
+
+export function addCatalogTaskToBacklog(
+	board: BoardData,
+	catalogId: string,
+): { board: BoardData; task: BoardCard | null; added: boolean } {
+	const result = runtimeTaskState.addCatalogTaskToBacklog(board, catalogId, createBrowserUuid);
+	return { board: result.board, task: result.task, added: result.added };
 }
 
 export interface AddTaskDependencyResult {

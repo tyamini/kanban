@@ -73,6 +73,7 @@ function createBoard(): BoardData {
 			},
 		],
 		dependencies: [],
+		catalog: [],
 	};
 }
 

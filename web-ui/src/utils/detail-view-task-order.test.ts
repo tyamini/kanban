@@ -73,6 +73,7 @@ describe("getNextDetailTaskIdAfterTrashMove", () => {
 					{ id: "trash", title: "Done", cards: [] },
 				],
 				dependencies: [],
+				catalog: [],
 			},
 			"i1",
 		);
@@ -118,6 +119,7 @@ describe("getNextDetailTaskIdAfterTrashMove", () => {
 					{ id: "trash", title: "Done", cards: [] },
 				],
 				dependencies: [],
+				catalog: [],
 			},
 			"r1",
 		);
@@ -177,6 +179,7 @@ describe("getNextDetailTaskIdAfterTrashMove", () => {
 					{ id: "trash", title: "Done", cards: [] },
 				],
 				dependencies: [],
+				catalog: [],
 			},
 			"b1",
 		);
@@ -208,6 +211,7 @@ describe("getNextDetailTaskIdAfterTrashMove", () => {
 					{ id: "trash", title: "Done", cards: [] },
 				],
 				dependencies: [],
+				catalog: [],
 			},
 			"b1",
 		);

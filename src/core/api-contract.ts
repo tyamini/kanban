@@ -206,6 +206,10 @@ export type RuntimeBoardDependency = z.infer<typeof runtimeBoardDependencySchema
 export const runtimeBoardDataSchema = z.object({
 	columns: z.array(runtimeBoardColumnSchema),
 	dependencies: z.array(runtimeBoardDependencySchema).default([]),
+	// Per-project catalog of reusable task templates. Catalog entries are inert:
+	// they are never run, never linked, and live outside the columns. "Add to
+	// backlog" duplicates an entry into the backlog column as a new task.
+	catalog: z.array(runtimeBoardCardSchema).default([]),
 });
 export type RuntimeBoardData = z.infer<typeof runtimeBoardDataSchema>;
 
