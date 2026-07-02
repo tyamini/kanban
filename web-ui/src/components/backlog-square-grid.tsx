@@ -1,6 +1,6 @@
 import { GripVertical, Play } from "lucide-react";
 import type { MouseEvent } from "react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import GridLayout, { type Layout } from "react-grid-layout";
 
 import "react-grid-layout/css/styles.css";
@@ -140,14 +140,21 @@ export function BacklogSquareGrid({
 }): React.ReactElement {
 	const [measureRef, rect] = useMeasure<HTMLDivElement>();
 	const { positions, savePositions } = useBacklogSquarePositions();
-	const isDraggingRef = useRef(false);
 
 	const width = isVisible ? rect.width : 0;
 	const cols = width > 0 ? Math.max(2, Math.floor((width + GRID_MARGIN_PX) / (TARGET_CELL_PX + GRID_MARGIN_PX))) : 4;
 	const rowHeight = width > 0 ? Math.max(48, (width - GRID_MARGIN_PX * (cols - 1)) / cols) : TARGET_CELL_PX;
 
 	const cardIds = useMemo(() => cards.map((card) => card.id), [cards]);
-	const layout = useMemo(() => buildLayout(cardIds, cols, positions), [cardIds, cols, positions]);
+	const savedLayout = useMemo(() => buildLayout(cardIds, cols, positions), [cardIds, cols, positions]);
+	const [layout, setLayout] = useState<Layout[]>(savedLayout);
+	const isDraggingRef = useRef(false);
+
+	useEffect(() => {
+		if (!isDraggingRef.current) {
+			setLayout(savedLayout);
+		}
+	}, [savedLayout]);
 
 	const arrangeInputRef = useRef({ cardIds, dependencies, cols });
 	arrangeInputRef.current = { cardIds, dependencies, cols };
@@ -161,8 +168,13 @@ export function BacklogSquareGrid({
 		savePositions(computeDependencyLayout(current.cardIds, current.dependencies, current.cols));
 	}, [arrangeNonce, savePositions]);
 
+	const handleLayoutChange = (nextLayout: Layout[]) => {
+		setLayout(nextLayout);
+	};
+
 	const handleDragStop = (nextLayout: Layout[]) => {
 		isDraggingRef.current = false;
+		setLayout(nextLayout);
 		savePositions(layoutToPositions(nextLayout));
 	};
 
@@ -188,6 +200,7 @@ export function BacklogSquareGrid({
 					preventCollision
 					draggableHandle=".kb-square-drag-handle"
 					draggableCancel=".kb-square-cancel"
+					onLayoutChange={handleLayoutChange}
 					onDragStart={() => {
 						isDraggingRef.current = true;
 					}}
@@ -197,48 +210,47 @@ export function BacklogSquareGrid({
 						const displayTitle = normalizePromptForDisplay(card.title) || truncateTaskPromptLabel(card.prompt);
 						return (
 							<div key={card.id} data-task-id={card.id} data-column-id="backlog">
-								<Tooltip content={displayTitle} side="bottom">
-									<div
-										className={cn(
-											"group relative flex h-full w-full cursor-pointer items-center justify-center",
-											"overflow-hidden rounded-md border border-border-bright bg-surface-2 p-1.5 text-center",
-											"hover:bg-surface-3",
-										)}
-										onClick={() => {
-											if (isDraggingRef.current) {
-												return;
-											}
-											onCardClick?.(card);
-										}}
+								<div
+									className={cn(
+										"group relative flex h-full w-full cursor-pointer items-center justify-center",
+										"overflow-hidden rounded-md border border-border-bright bg-surface-2 p-1.5 text-center",
+										"hover:bg-surface-3",
+									)}
+									onClick={() => {
+										if (isDraggingRef.current) {
+											return;
+										}
+										onCardClick?.(card);
+									}}
+								>
+									<button
+										type="button"
+										aria-label="Drag task"
+										className="kb-square-drag-handle absolute bottom-1 left-1 z-10 inline-flex cursor-grab items-center justify-center rounded-sm p-0.5 text-text-tertiary hover:text-text-primary active:cursor-grabbing"
+										onClick={stopEvent}
 									>
-										<button
-											type="button"
-											aria-label="Drag task"
-											className="kb-square-drag-handle absolute bottom-1 left-1 inline-flex cursor-grab items-center justify-center rounded-sm p-0.5 text-text-tertiary opacity-0 hover:text-text-primary active:cursor-grabbing group-hover:opacity-100"
-											onMouseDown={stopEvent}
-											onClick={stopEvent}
-										>
-											<GripVertical size={12} />
-										</button>
+										<GripVertical size={12} />
+									</button>
+									<Tooltip content={displayTitle} side="bottom">
 										<span className="line-clamp-3 px-3 text-xs font-medium leading-tight text-text-primary">
 											{displayTitle}
 										</span>
-										{onStart ? (
-											<button
-												type="button"
-												aria-label="Start task"
-												className="kb-square-cancel absolute right-1 top-1 inline-flex items-center justify-center rounded-sm p-0.5 text-text-secondary opacity-0 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent group-hover:opacity-100"
-												onMouseDown={stopEvent}
-												onClick={(event) => {
-													stopEvent(event);
-													onStart(card.id);
-												}}
-											>
-												<Play size={12} />
-											</button>
-										) : null}
-									</div>
-								</Tooltip>
+									</Tooltip>
+									{onStart ? (
+										<button
+											type="button"
+											aria-label="Start task"
+											className="kb-square-cancel absolute right-1 top-1 z-10 inline-flex items-center justify-center rounded-sm p-0.5 text-text-secondary opacity-0 hover:text-text-primary focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent group-hover:opacity-100"
+											onMouseDown={stopEvent}
+											onClick={(event) => {
+												stopEvent(event);
+												onStart(card.id);
+											}}
+										>
+											<Play size={12} />
+										</button>
+									) : null}
+								</div>
 							</div>
 						);
 					})}
