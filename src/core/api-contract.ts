@@ -667,6 +667,76 @@ export const runtimeMachineProjectAddRequestSchema = z
 	.refine((data) => data.path || data.gitUrl, { message: "Either path or gitUrl is required" });
 export type RuntimeMachineProjectAddRequest = z.infer<typeof runtimeMachineProjectAddRequestSchema>;
 
+// ── Borrow machines (Jenkins pool) ──────────────────────────────────────────
+
+export const runtimeBorrowedMachineSchema = z.object({
+	machine: z.string(),
+	borrower: z.string().nullable(),
+	leaseEndEpoch: z.number().nullable(),
+});
+export type RuntimeBorrowedMachine = z.infer<typeof runtimeBorrowedMachineSchema>;
+
+export const runtimeBorrowJobActionSchema = z.enum(["borrow", "return", "extend"]);
+export type RuntimeBorrowJobAction = z.infer<typeof runtimeBorrowJobActionSchema>;
+
+export const runtimeBorrowJobStatusSchema = z.enum(["running", "succeeded", "failed"]);
+export type RuntimeBorrowJobStatus = z.infer<typeof runtimeBorrowJobStatusSchema>;
+
+export const runtimeBorrowJobSchema = z.object({
+	id: z.string(),
+	action: runtimeBorrowJobActionSchema,
+	label: z.string(),
+	status: runtimeBorrowJobStatusSchema,
+	statusLog: z.array(z.string()),
+	buildUrl: z.string().nullable(),
+	reservedMachine: z.string().nullable(),
+	resultMachine: z.string().nullable(),
+	error: z.string().nullable(),
+	startedAt: z.number(),
+	finishedAt: z.number().nullable(),
+});
+export type RuntimeBorrowJob = z.infer<typeof runtimeBorrowJobSchema>;
+
+export const runtimeBorrowStateResponseSchema = z.object({
+	types: z.array(z.string()),
+	borrowed: z.array(runtimeBorrowedMachineSchema),
+	jobs: z.array(runtimeBorrowJobSchema),
+	credentialsError: z.string().nullable(),
+});
+export type RuntimeBorrowStateResponse = z.infer<typeof runtimeBorrowStateResponseSchema>;
+
+export const runtimeBorrowRequestSchema = z.object({
+	type: z.string(),
+	leaseHours: z.number().int().positive(),
+});
+export type RuntimeBorrowRequest = z.infer<typeof runtimeBorrowRequestSchema>;
+
+export const runtimeBorrowExtendRequestSchema = z.object({
+	machine: z.string(),
+	leaseHours: z.number().int().positive(),
+});
+export type RuntimeBorrowExtendRequest = z.infer<typeof runtimeBorrowExtendRequestSchema>;
+
+export const runtimeBorrowReturnRequestSchema = z.object({
+	machine: z.string(),
+});
+export type RuntimeBorrowReturnRequest = z.infer<typeof runtimeBorrowReturnRequestSchema>;
+
+export const runtimeBorrowJobStartedResponseSchema = z.object({
+	jobId: z.string(),
+});
+export type RuntimeBorrowJobStartedResponse = z.infer<typeof runtimeBorrowJobStartedResponseSchema>;
+
+export const runtimeBorrowDismissJobRequestSchema = z.object({
+	jobId: z.string(),
+});
+export type RuntimeBorrowDismissJobRequest = z.infer<typeof runtimeBorrowDismissJobRequestSchema>;
+
+export const runtimeBorrowDismissJobResponseSchema = z.object({
+	ok: z.boolean(),
+});
+export type RuntimeBorrowDismissJobResponse = z.infer<typeof runtimeBorrowDismissJobResponseSchema>;
+
 export const runtimeWorktreeEnsureRequestSchema = z.object({
 	taskId: z.string(),
 	baseRef: z.string(),

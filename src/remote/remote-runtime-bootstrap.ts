@@ -185,6 +185,10 @@ function buildLaunchCommand(input: {
 	// freshly-spawned daemon.
 	const launchLines = [
 		`${input.pathPrefix.trim()}`,
+		// User-installed agent CLIs (claude, etc.) live in these dirs, which are
+		// not on a non-interactive login PATH. Add them so the runtime's agent
+		// discovery finds them and PTY-spawned agents can run.
+		`export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"`,
 		`PIDFILE="${REMOTE_RUNTIME_PID_FILE}"`,
 		input.forceRestart
 			? `[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; command -v fuser >/dev/null 2>&1 && fuser -k ${input.remotePort}/tcp 2>/dev/null; sleep 2`

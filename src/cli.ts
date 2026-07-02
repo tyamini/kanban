@@ -397,6 +397,7 @@ async function startServer(): Promise<{
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
 		{ createRemoteMachineManager },
+		{ createBorrowMachineManager },
 	] = await Promise.all([
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
@@ -407,6 +408,7 @@ async function startServer(): Promise<{
 		import("./server/workspace-registry.js"),
 		import("./update/update.js"),
 		import("./remote/remote-machine-manager.js"),
+		import("./remote/borrow-machine-manager.js"),
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	const machineManager = createRemoteMachineManager({
@@ -416,6 +418,13 @@ async function startServer(): Promise<{
 	});
 	machineManager.onChange(() => {
 		void runtimeStateHub?.broadcastRuntimeProjectsUpdated(null);
+	});
+	// Borrow state (Jenkins pool) is polled by the Machines panel via borrow.getState,
+	// so no state-stream broadcast wiring is needed here.
+	const borrowManager = createBorrowMachineManager({
+		warn: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
 	});
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
@@ -482,6 +491,7 @@ async function startServer(): Promise<{
 		collectProjectWorktreeTaskIdsForRemoval,
 		pickDirectoryPathFromSystemDialog,
 		machineManager,
+		borrowManager,
 		getUpdateStatus: () => {
 			const notification = getPendingUpdateNotification();
 			if (!notification) {

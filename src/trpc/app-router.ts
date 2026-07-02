@@ -6,6 +6,13 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import type {
+	RuntimeBorrowDismissJobRequest,
+	RuntimeBorrowDismissJobResponse,
+	RuntimeBorrowExtendRequest,
+	RuntimeBorrowJobStartedResponse,
+	RuntimeBorrowRequest,
+	RuntimeBorrowReturnRequest,
+	RuntimeBorrowStateResponse,
 	RuntimeClineAccountBalanceResponse,
 	RuntimeClineAccountOrganizationsResponse,
 	RuntimeClineAccountProfileResponse,
@@ -106,6 +113,13 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import {
+	runtimeBorrowDismissJobRequestSchema,
+	runtimeBorrowDismissJobResponseSchema,
+	runtimeBorrowExtendRequestSchema,
+	runtimeBorrowJobStartedResponseSchema,
+	runtimeBorrowRequestSchema,
+	runtimeBorrowReturnRequestSchema,
+	runtimeBorrowStateResponseSchema,
 	runtimeClineAccountBalanceResponseSchema,
 	runtimeClineAccountOrganizationsResponseSchema,
 	runtimeClineAccountProfileResponseSchema,
@@ -397,6 +411,13 @@ export interface RuntimeTrpcContext {
 		remove: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineRemoveResponse>;
 		listDirectoryContents: (input: RuntimeMachineDirectoryListRequest) => Promise<RuntimeDirectoryListResponse>;
 		addProject: (input: RuntimeMachineProjectAddRequest) => Promise<RuntimeProjectAddResponse>;
+	};
+	borrowApi: {
+		getState: () => Promise<RuntimeBorrowStateResponse>;
+		borrow: (input: RuntimeBorrowRequest) => Promise<RuntimeBorrowJobStartedResponse>;
+		extend: (input: RuntimeBorrowExtendRequest) => Promise<RuntimeBorrowJobStartedResponse>;
+		return: (input: RuntimeBorrowReturnRequest) => Promise<RuntimeBorrowJobStartedResponse>;
+		dismissJob: (input: RuntimeBorrowDismissJobRequest) => Promise<RuntimeBorrowDismissJobResponse>;
 	};
 }
 
@@ -797,6 +818,35 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeProjectAddResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.machinesApi.addProject(input);
+			}),
+	}),
+	borrow: t.router({
+		getState: t.procedure.output(runtimeBorrowStateResponseSchema).query(async ({ ctx }) => {
+			return await ctx.borrowApi.getState();
+		}),
+		borrow: t.procedure
+			.input(runtimeBorrowRequestSchema)
+			.output(runtimeBorrowJobStartedResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.borrowApi.borrow(input);
+			}),
+		extend: t.procedure
+			.input(runtimeBorrowExtendRequestSchema)
+			.output(runtimeBorrowJobStartedResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.borrowApi.extend(input);
+			}),
+		return: t.procedure
+			.input(runtimeBorrowReturnRequestSchema)
+			.output(runtimeBorrowJobStartedResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.borrowApi.return(input);
+			}),
+		dismissJob: t.procedure
+			.input(runtimeBorrowDismissJobRequestSchema)
+			.output(runtimeBorrowDismissJobResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.borrowApi.dismissJob(input);
 			}),
 	}),
 });

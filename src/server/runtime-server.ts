@@ -25,6 +25,7 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import type { BorrowMachineManager } from "../remote/borrow-machine-manager";
 import type { RemoteMachineManager } from "../remote/remote-machine-manager";
 import { createRemoteRuntimeProxy } from "../remote/remote-runtime-proxy";
 import {
@@ -43,6 +44,7 @@ import { isRemoteWorkspaceId, loadWorkspaceContextById } from "../state/workspac
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
+import { type BorrowApi, createBorrowApi, createUnavailableBorrowApi } from "../trpc/borrow-api";
 import { createHooksApi } from "../trpc/hooks-api";
 import { createMachinesApi, type MachinesApi } from "../trpc/machines-api";
 import { createProjectsApi } from "../trpc/projects-api";
@@ -81,6 +83,8 @@ export interface CreateRuntimeServerDependencies {
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
 	/** Remote-machine federation manager. When absent, remote features are disabled. */
 	machineManager?: RemoteMachineManager | null;
+	/** Borrow-machine (Jenkins pool) manager. When absent, borrowing is disabled. */
+	borrowManager?: BorrowMachineManager | null;
 }
 
 function createUnavailableMachinesApi(): MachinesApi {
@@ -140,6 +144,9 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
 			})
 		: createUnavailableMachinesApi();
+	const borrowApi: BorrowApi = deps.borrowManager
+		? createBorrowApi({ borrowManager: deps.borrowManager })
+		: createUnavailableBorrowApi();
 
 	const resolveWorkspaceScopeFromRequest = async (
 		request: IncomingMessage,
@@ -288,6 +295,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
 			}),
 			machinesApi,
+			borrowApi,
 		};
 	};
 
