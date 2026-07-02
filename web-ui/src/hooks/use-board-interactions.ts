@@ -55,6 +55,7 @@ interface UseBoardInteractionsInput {
 	currentProjectId: string | null;
 	setSelectedTaskId: Dispatch<SetStateAction<string | null>>;
 	setIsClearTrashDialogOpen: Dispatch<SetStateAction<boolean>>;
+	setIsClearBacklogDialogOpen: Dispatch<SetStateAction<boolean>>;
 	setIsGitHistoryOpen: Dispatch<SetStateAction<boolean>>;
 	stopTaskSession: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<unknown>;
@@ -89,10 +90,13 @@ export interface UseBoardInteractionsResult {
 	handleCancelAutomaticTaskAction: (taskId: string) => void;
 	handleOpenClearTrash: () => void;
 	handleConfirmClearTrash: () => void;
+	handleOpenClearBacklog: () => void;
+	handleConfirmClearBacklog: () => void;
 	handleAddReviewComments: (taskId: string, text: string) => Promise<void>;
 	handleSendReviewComments: (taskId: string, text: string) => Promise<void>;
 	moveToTrashLoadingById: Record<string, boolean>;
 	trashTaskCount: number;
+	backlogTaskCount: number;
 }
 
 export function useBoardInteractions({
@@ -105,6 +109,7 @@ export function useBoardInteractions({
 	currentProjectId,
 	setSelectedTaskId,
 	setIsClearTrashDialogOpen,
+	setIsClearBacklogDialogOpen,
 	setIsGitHistoryOpen,
 	stopTaskSession,
 	cleanupTaskWorkspace,
@@ -280,6 +285,12 @@ export function useBoardInteractions({
 		return trashColumn ? trashColumn.cards.map((card) => card.id) : [];
 	}, [board.columns]);
 	const trashTaskCount = trashTaskIds.length;
+
+	const backlogTaskIds = useMemo(() => {
+		const backlogColumn = board.columns.find((column) => column.id === "backlog");
+		return backlogColumn ? backlogColumn.cards.map((card) => card.id) : [];
+	}, [board.columns]);
+	const backlogTaskCount = backlogTaskIds.length;
 
 	const maybeRequestNotificationPermissionForTaskStart = useCallback(() => {
 		const shouldPromptForNotificationPermission =
@@ -952,6 +963,52 @@ export function useBoardInteractions({
 		trashTaskIds,
 	]);
 
+	const handleOpenClearBacklog = useCallback(() => {
+		if (backlogTaskCount === 0) {
+			return;
+		}
+		setIsClearBacklogDialogOpen(true);
+	}, [backlogTaskCount, setIsClearBacklogDialogOpen]);
+
+	const handleConfirmClearBacklog = useCallback(() => {
+		const taskIds = [...backlogTaskIds];
+		setIsClearBacklogDialogOpen(false);
+		if (taskIds.length === 0) {
+			return;
+		}
+
+		setBoard((currentBoard) => clearColumnTasks(currentBoard, "backlog").board);
+		setSessions((currentSessions) => {
+			const nextSessions = { ...currentSessions };
+			for (const taskId of taskIds) {
+				delete nextSessions[taskId];
+			}
+			return nextSessions;
+		});
+		if (selectedTaskId && taskIds.includes(selectedTaskId)) {
+			setSelectedTaskId(null);
+			clearTaskWorkspaceInfo(selectedTaskId);
+		}
+
+		void (async () => {
+			await Promise.all(
+				taskIds.map(async (taskId) => {
+					await stopTaskSession(taskId);
+					await cleanupTaskWorkspace(taskId);
+				}),
+			);
+		})();
+	}, [
+		backlogTaskIds,
+		cleanupTaskWorkspace,
+		selectedTaskId,
+		setBoard,
+		setIsClearBacklogDialogOpen,
+		setSelectedTaskId,
+		setSessions,
+		stopTaskSession,
+	]);
+
 	const resetBoardInteractionsState = useCallback(() => {
 		previousSessionsRef.current = {};
 		moveToTrashLoadingByIdRef.current = {};
@@ -961,7 +1018,13 @@ export function useBoardInteractions({
 		}
 		resetProgrammaticCardMoves();
 		setIsClearTrashDialogOpen(false);
-	}, [resetProgrammaticCardMoves, resolvePendingProgrammaticStartMove, setIsClearTrashDialogOpen]);
+		setIsClearBacklogDialogOpen(false);
+	}, [
+		resetProgrammaticCardMoves,
+		resolvePendingProgrammaticStartMove,
+		setIsClearBacklogDialogOpen,
+		setIsClearTrashDialogOpen,
+	]);
 
 	useEffect(() => {
 		resetBoardInteractionsState();
@@ -985,9 +1048,12 @@ export function useBoardInteractions({
 		handleCancelAutomaticTaskAction,
 		handleOpenClearTrash,
 		handleConfirmClearTrash,
+		handleOpenClearBacklog,
+		handleConfirmClearBacklog,
 		handleAddReviewComments,
 		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		backlogTaskCount,
 	};
 }

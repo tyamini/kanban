@@ -94,12 +94,19 @@ export function useRawLocalStorageValue<T extends string>(
 	const value = storedValue ? (normalize(storedValue) ?? initialValue) : initialValue;
 	const setValue: StateSetter<T> = useCallback(
 		(nextValue) => {
-			setStoredValue((currentValue) => {
-				const resolvedCurrent = currentValue ? (normalize(currentValue) ?? initialValue) : initialValue;
-				return resolveNextValue(nextValue, resolvedCurrent);
-			});
+			// react-use's useLocalStorage passes a stale `state` into functional updaters.
+			// Read the latest value from storage when resolving functional updates.
+			const resolved =
+				typeof nextValue === "function"
+					? (() => {
+							const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+							const current = raw ? (normalize(raw) ?? initialValue) : initialValue;
+							return resolveNextValue(nextValue, current);
+						})()
+					: nextValue;
+			setStoredValue(resolved);
 		},
-		[initialValue, normalize, setStoredValue],
+		[initialValue, key, normalize, setStoredValue],
 	);
 	return [value, setValue];
 }

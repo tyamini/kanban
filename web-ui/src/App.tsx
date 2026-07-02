@@ -9,6 +9,7 @@ import { AddProjectDialog } from "@/components/add-project-dialog";
 import { notifyError, showAppToast } from "@/components/app-toaster";
 import { CardDetailView } from "@/components/card-detail-view";
 import { CatalogPanel } from "@/components/catalog-panel";
+import { ClearBacklogDialog } from "@/components/clear-backlog-dialog";
 import { ClearTrashDialog } from "@/components/clear-trash-dialog";
 import { DebugDialog } from "@/components/debug-dialog";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
@@ -98,6 +99,7 @@ export default function App(): ReactElement {
 	const [settingsInitialSection, setSettingsInitialSection] = useState<RuntimeSettingsSection | null>(null);
 	const [homeSidebarSection, setHomeSidebarSection] = useState<"projects" | "agent">("projects");
 	const [isClearTrashDialogOpen, setIsClearTrashDialogOpen] = useState(false);
+	const [isClearBacklogDialogOpen, setIsClearBacklogDialogOpen] = useState(false);
 	const [isGitHistoryOpen, setIsGitHistoryOpen] = useState(false);
 	const [pendingTaskStartAfterEditId, setPendingTaskStartAfterEditId] = useState<string | null>(null);
 	const taskEditorResetRef = useRef<() => void>(() => {});
@@ -585,10 +587,13 @@ export default function App(): ReactElement {
 		handleCancelAutomaticTaskAction,
 		handleOpenClearTrash,
 		handleConfirmClearTrash,
+		handleOpenClearBacklog,
+		handleConfirmClearBacklog,
 		handleAddReviewComments,
 		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		backlogTaskCount,
 	} = useBoardInteractions({
 		board,
 		setBoard,
@@ -599,6 +604,7 @@ export default function App(): ReactElement {
 		currentProjectId,
 		setSelectedTaskId,
 		setIsClearTrashDialogOpen,
+		setIsClearBacklogDialogOpen,
 		setIsGitHistoryOpen,
 		stopTaskSession,
 		cleanupTaskWorkspace,
@@ -1016,10 +1022,12 @@ export default function App(): ReactElement {
 												onStartTask={handleStartTaskFromBoard}
 												onStartAllTasks={handleStartAllBacklogTasksFromBoard}
 												onClearTrash={handleOpenClearTrash}
+												onClearBacklog={handleOpenClearBacklog}
 												catalogPanel={catalogPanel}
 												editingTaskId={editingTaskId}
 												inlineTaskEditor={inlineTaskEditor}
 												onEditTask={handleOpenEditTask}
+												onCancelEditTask={handleCancelEditTask}
 												onSaveTaskTitle={handleSaveTaskTitle}
 												onCommitTask={handleCommitTask}
 												onOpenPrTask={handleOpenPrTask}
@@ -1221,6 +1229,12 @@ export default function App(): ReactElement {
 					taskCount={trashTaskCount}
 					onCancel={() => setIsClearTrashDialogOpen(false)}
 					onConfirm={handleConfirmClearTrash}
+				/>
+				<ClearBacklogDialog
+					open={isClearBacklogDialogOpen}
+					taskCount={backlogTaskCount}
+					onCancel={() => setIsClearBacklogDialogOpen(false)}
+					onConfirm={handleConfirmClearBacklog}
 				/>
 				<StartupOnboardingDialog
 					open={isStartupOnboardingDialogOpen}

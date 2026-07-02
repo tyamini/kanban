@@ -315,6 +315,15 @@ body,
 	padding: 6px;
 }
 
+.kb-backlog-square-grid .react-grid-item.react-grid-placeholder {
+	background: var(--color-accent);
+	opacity: 0.18;
+	border-radius: var(--radius-md);
+}
+
+.kb-backlog-square-grid .react-grid-item.react-draggable-dragging {
+	z-index: 3;
+}
 
 
 .kb-board[data-programmatic-card-move="true"] [data-rfd-draggable-context-id],

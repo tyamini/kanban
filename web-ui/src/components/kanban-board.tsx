@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardColumn } from "@/components/board-column";
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
+import { useBacklogViewMode } from "@/hooks/use-backlog-view-mode";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { canCreateTaskDependency } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
@@ -35,10 +36,12 @@ export function KanbanBoard({
 	onStartTask,
 	onStartAllTasks,
 	onClearTrash,
+	onClearBacklog,
 	catalogPanel,
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
+	onCancelEditTask,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -63,10 +66,12 @@ export function KanbanBoard({
 	onStartTask?: (taskId: string) => void;
 	onStartAllTasks?: () => void;
 	onClearTrash?: () => void;
+	onClearBacklog?: () => void;
 	catalogPanel?: ReactNode;
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCard) => void;
+	onCancelEditTask?: () => void;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -94,6 +99,11 @@ export function KanbanBoard({
 	const [activeDragSourceColumnId, setActiveDragSourceColumnId] = useState<BoardColumnId | null>(null);
 	const [programmaticCardMoveInFlight, setProgrammaticCardMoveInFlight] =
 		useState<ProgrammaticCardMoveInFlight | null>(null);
+	const { viewMode: backlogViewMode, toggleViewMode: toggleBacklogViewMode } = useBacklogViewMode();
+	const handleToggleBacklogViewMode = useCallback(() => {
+		onCancelEditTask?.();
+		toggleBacklogViewMode();
+	}, [onCancelEditTask, toggleBacklogViewMode]);
 	const dependencyLinking = useDependencyLinking({
 		canLinkTasks: (fromTaskId, toTaskId) => canCreateTaskDependency(data, fromTaskId, toTaskId),
 		// The user drags in execution order: from the task that runs FIRST (drag start)
@@ -399,9 +409,13 @@ export function KanbanBoard({
 						onStartTask={column.id === "backlog" ? onStartTask : undefined}
 						onStartAllTasks={column.id === "backlog" ? onStartAllTasks : undefined}
 						onClearTrash={column.id === "trash" ? onClearTrash : undefined}
+						onClearBacklog={column.id === "backlog" ? onClearBacklog : undefined}
+						dependencies={column.id === "backlog" ? dependencies : undefined}
 						editingTaskId={column.id === "backlog" ? editingTaskId : null}
 						inlineTaskEditor={column.id === "backlog" ? inlineTaskEditor : undefined}
 						onEditTask={column.id === "backlog" ? onEditTask : undefined}
+						backlogViewMode={column.id === "backlog" ? backlogViewMode : undefined}
+						onToggleBacklogViewMode={column.id === "backlog" ? handleToggleBacklogViewMode : undefined}
 						onSaveTitle={column.id !== "trash" ? onSaveTaskTitle : undefined}
 						onCommitTask={column.id === "review" ? onCommitTask : undefined}
 						onOpenPrTask={column.id === "review" ? onOpenPrTask : undefined}
