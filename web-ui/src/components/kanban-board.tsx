@@ -449,6 +449,7 @@ export function KanbanBoard({
 					activeTaskId={activeDragTaskId ?? programmaticCardMoveInFlight?.taskId ?? null}
 					activeTaskEffectiveColumnId={activeTaskEffectiveColumnId}
 					isMotionActive={activeDragTaskId !== null || programmaticCardMoveInFlight !== null}
+					useGeometryForBacklog={backlogViewMode === "square"}
 					onDeleteDependency={onDeleteDependency}
 				/>
 			</section>

@@ -191,6 +191,7 @@ function chooseConnection(
 	secondLaneOffset: number,
 	firstPadding: number,
 	secondPadding: number,
+	useGeometryForBacklog: boolean,
 ): { start: AnchorPoint; end: AnchorPoint } {
 	// Rendered links currently only survive when at least one endpoint is in backlog.
 	// Draft links may still target free pointer space while the user is dragging.
@@ -236,10 +237,17 @@ function chooseConnection(
 		firstColumnId === secondColumnId &&
 		(firstColumnId === "backlog" || firstColumnId === "in_progress" || firstColumnId === "review")
 	) {
-		return {
-			start: getAnchorPoint(firstAnchor, "right", firstLaneOffset, firstPadding),
-			end: getAnchorPoint(secondAnchor, "right", secondLaneOffset, secondPadding),
-		};
+		// The square backlog lays cards out in 2D, so the connectors should follow
+		// the relative position of the two cards rather than always exiting on the
+		// right. Vertical lists (classic backlog / other columns) keep the fixed
+		// right -> right arc so the link stays clear of the stacked cards.
+		const isSquareBacklog = useGeometryForBacklog && firstColumnId === "backlog";
+		if (!isSquareBacklog) {
+			return {
+				start: getAnchorPoint(firstAnchor, "right", firstLaneOffset, firstPadding),
+				end: getAnchorPoint(secondAnchor, "right", secondLaneOffset, secondPadding),
+			};
+		}
 	}
 
 	if (firstColumnOrder !== null && secondColumnOrder !== null && firstColumnOrder !== secondColumnOrder) {
@@ -302,6 +310,7 @@ function computePath(
 	secondAnchor: TaskAnchor,
 	firstLaneOffset: number,
 	secondLaneOffset: number,
+	useGeometryForBacklog: boolean,
 	bounds?: { width: number; height: number },
 ): {
 	geometry: DependencyGeometry;
@@ -320,6 +329,7 @@ function computePath(
 		secondLaneOffset,
 		sourcePadding,
 		targetPadding,
+		useGeometryForBacklog,
 	);
 	const minX = bounds ? 2 : Number.NEGATIVE_INFINITY;
 	const maxX = bounds ? bounds.width - 2 : Number.POSITIVE_INFINITY;
@@ -422,6 +432,7 @@ export function DependencyOverlay({
 	activeTaskId,
 	activeTaskEffectiveColumnId,
 	isMotionActive = false,
+	useGeometryForBacklog = false,
 	onDeleteDependency,
 }: {
 	containerRef: RefObject<HTMLElement>;
@@ -430,6 +441,7 @@ export function DependencyOverlay({
 	activeTaskId?: string | null;
 	activeTaskEffectiveColumnId?: BoardColumnId | null;
 	isMotionActive?: boolean;
+	useGeometryForBacklog?: boolean;
 	onDeleteDependency?: (dependencyId: string) => void;
 }): React.ReactElement | null {
 	const [layout, setLayout] = useState<DependencyLayout>(() => createEmptyLayout());
@@ -742,6 +754,7 @@ export function DependencyOverlay({
 				candidate.targetAnchor,
 				sourceLaneOffset,
 				targetLaneOffset,
+				useGeometryForBacklog,
 				{ width: layout.width, height: layout.height },
 			);
 			return {
@@ -755,7 +768,7 @@ export function DependencyOverlay({
 				isTransient: candidate.isTransient,
 			};
 		});
-	}, [activeTaskId, dependencies, layout.anchors, layout.height, layout.width]);
+	}, [activeTaskId, dependencies, layout.anchors, layout.height, layout.width, useGeometryForBacklog]);
 
 	useLayoutEffect(() => {
 		const now = performance.now();
@@ -865,12 +878,12 @@ export function DependencyOverlay({
 			centerY: draft.pointerClientY - containerRect.top,
 			columnId: null,
 		};
-		const geometry = computePath(sourceAnchor, targetAnchor ?? pointerTarget, 0, 0, {
+		const geometry = computePath(sourceAnchor, targetAnchor ?? pointerTarget, 0, 0, useGeometryForBacklog, {
 			width: layout.width,
 			height: layout.height,
 		});
 		return geometry.path;
-	}, [containerRef, draft, layout.anchors, layout.height, layout.width]);
+	}, [containerRef, draft, layout.anchors, layout.height, layout.width, useGeometryForBacklog]);
 
 	const hoveredDependency = useMemo(
 		() =>
