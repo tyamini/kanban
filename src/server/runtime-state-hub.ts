@@ -31,11 +31,20 @@ export interface DisposeRuntimeStateWorkspaceOptions {
 	closeClientErrorMessage?: string;
 }
 
+export interface RemoteStateStreamGateway {
+	isRemoteWorkspaceId: (workspaceId: string) => boolean;
+	subscribeWorkspaceStream: (
+		hubWorkspaceId: string,
+		handlers: { onMessage: (message: RuntimeStateStreamMessage) => void; onClose: () => void },
+	) => (() => void) | null;
+}
+
 export interface CreateRuntimeStateHubDependencies {
 	workspaceRegistry: Pick<
 		WorkspaceRegistry,
 		"resolveWorkspaceForStream" | "buildProjectsPayload" | "buildWorkspaceStateSnapshot"
 	>;
+	remoteStreamGateway?: RemoteStateStreamGateway;
 }
 
 export interface RuntimeStateHub {
@@ -70,6 +79,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	const runtimeStateClientsByWorkspaceId = new Map<string, Set<WebSocket>>();
 	const runtimeStateClients = new Set<WebSocket>();
 	const runtimeStateWorkspaceIdByClient = new Map<WebSocket, string>();
+	const remoteStreamUnsubscribeByWorkspaceId = new Map<string, () => void>();
 	let clineSessionContextVersion = 0;
 	const runtimeStateWebSocketServer = new WebSocketServer({ noServer: true });
 	const workspaceMetadataMonitor = createWorkspaceMetadataMonitor({
@@ -97,6 +107,41 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 			client.send(JSON.stringify(payload));
 		} catch {
 			// Ignore websocket write errors; close handlers clean up disconnected sockets.
+		}
+	};
+
+	const ensureRemoteStreamSubscription = (workspaceId: string): void => {
+		if (!deps.remoteStreamGateway || remoteStreamUnsubscribeByWorkspaceId.has(workspaceId)) {
+			return;
+		}
+		const unsubscribe = deps.remoteStreamGateway.subscribeWorkspaceStream(workspaceId, {
+			onMessage: (message) => {
+				const clients = runtimeStateClientsByWorkspaceId.get(workspaceId);
+				if (!clients) {
+					return;
+				}
+				for (const client of clients) {
+					sendRuntimeStateMessage(client, message);
+				}
+			},
+			onClose: () => {
+				remoteStreamUnsubscribeByWorkspaceId.delete(workspaceId);
+			},
+		});
+		if (unsubscribe) {
+			remoteStreamUnsubscribeByWorkspaceId.set(workspaceId, unsubscribe);
+		}
+	};
+
+	const closeRemoteStreamSubscriptionIfUnused = (workspaceId: string): void => {
+		const clients = runtimeStateClientsByWorkspaceId.get(workspaceId);
+		if (clients && clients.size > 0) {
+			return;
+		}
+		const unsubscribe = remoteStreamUnsubscribeByWorkspaceId.get(workspaceId);
+		if (unsubscribe) {
+			unsubscribe();
+			remoteStreamUnsubscribeByWorkspaceId.delete(workspaceId);
 		}
 	};
 
@@ -233,6 +278,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 					runtimeStateClientsByWorkspaceId.delete(workspaceId);
 				}
 			}
+			closeRemoteStreamSubscriptionIfUnused(workspaceId);
 		}
 		runtimeStateWorkspaceIdByClient.delete(client);
 		runtimeStateClients.delete(client);
@@ -407,7 +453,24 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 				};
 				let workspaceState: RuntimeStateStreamSnapshotMessage["workspaceState"];
 				let workspaceMetadata: RuntimeStateStreamSnapshotMessage["workspaceMetadata"];
-				if (workspace.workspaceId && workspace.workspacePath) {
+				const isRemoteWorkspace = workspace.workspaceId
+					? (deps.remoteStreamGateway?.isRemoteWorkspaceId(workspace.workspaceId) ?? false)
+					: false;
+				if (workspace.workspaceId && isRemoteWorkspace) {
+					// Remote workspace: state comes from the remote runtime (via the
+					// machine manager) and local git-metadata monitoring does not apply.
+					monitorWorkspaceId = workspace.workspaceId;
+					projectsPayload = await deps.workspaceRegistry.buildProjectsPayload(workspace.workspaceId);
+					try {
+						workspaceState = await deps.workspaceRegistry.buildWorkspaceStateSnapshot(
+							workspace.workspaceId,
+							workspace.workspacePath ?? "",
+						);
+					} catch {
+						workspaceState = null;
+					}
+					workspaceMetadata = null;
+				} else if (workspace.workspaceId && workspace.workspacePath) {
 					monitorWorkspaceId = workspace.workspaceId;
 					[projectsPayload, workspaceState] = await Promise.all([
 						deps.workspaceRegistry.buildProjectsPayload(workspace.workspaceId),
@@ -452,15 +515,21 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 					workspaceClients.add(client);
 					runtimeStateClientsByWorkspaceId.set(monitorWorkspaceId, workspaceClients);
 					runtimeStateWorkspaceIdByClient.set(client, monitorWorkspaceId);
-					const clineSummaries = Array.from(
-						clinePreviousSummaryByWorkspaceId.get(monitorWorkspaceId)?.values() ?? [],
-					);
-					if (clineSummaries.length > 0) {
-						sendRuntimeStateMessage(client, {
-							type: "task_sessions_updated",
-							workspaceId: monitorWorkspaceId,
-							summaries: clineSummaries,
-						} satisfies RuntimeStateStreamTaskSessionsMessage);
+					if (isRemoteWorkspace) {
+						// Forward the remote runtime's live deltas (sessions, chat, state)
+						// to every hub client viewing this remote workspace.
+						ensureRemoteStreamSubscription(monitorWorkspaceId);
+					} else {
+						const clineSummaries = Array.from(
+							clinePreviousSummaryByWorkspaceId.get(monitorWorkspaceId)?.values() ?? [],
+						);
+						if (clineSummaries.length > 0) {
+							sendRuntimeStateMessage(client, {
+								type: "task_sessions_updated",
+								workspaceId: monitorWorkspaceId,
+								summaries: clineSummaries,
+							} satisfies RuntimeStateStreamTaskSessionsMessage);
+						}
 					}
 				}
 				if (workspace.removedRequestedWorkspacePath) {
@@ -583,6 +652,14 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 				}
 			}
 			clineMessageUnsubscribeByWorkspaceId.clear();
+			for (const unsubscribe of remoteStreamUnsubscribeByWorkspaceId.values()) {
+				try {
+					unsubscribe();
+				} catch {
+					// Ignore remote stream cleanup errors during shutdown.
+				}
+			}
+			remoteStreamUnsubscribeByWorkspaceId.clear();
 			workspaceMetadataMonitor.close();
 			for (const client of runtimeStateClients) {
 				try {

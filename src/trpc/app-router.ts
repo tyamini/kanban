@@ -53,6 +53,15 @@ import type {
 	RuntimeGitSyncResponse,
 	RuntimeHookIngestRequest,
 	RuntimeHookIngestResponse,
+	RuntimeMachineActionResponse,
+	RuntimeMachineAddResponse,
+	RuntimeMachineConnectionInput,
+	RuntimeMachineDirectoryListRequest,
+	RuntimeMachineIdRequest,
+	RuntimeMachineListResponse,
+	RuntimeMachineProjectAddRequest,
+	RuntimeMachineRemoveResponse,
+	RuntimeMachineTestConnectionResponse,
 	RuntimeOpenFileRequest,
 	RuntimeOpenFileResponse,
 	RuntimeProjectAddRequest,
@@ -144,6 +153,15 @@ import {
 	runtimeGitSyncResponseSchema,
 	runtimeHookIngestRequestSchema,
 	runtimeHookIngestResponseSchema,
+	runtimeMachineActionResponseSchema,
+	runtimeMachineAddResponseSchema,
+	runtimeMachineConnectionInputSchema,
+	runtimeMachineDirectoryListRequestSchema,
+	runtimeMachineIdRequestSchema,
+	runtimeMachineListResponseSchema,
+	runtimeMachineProjectAddRequestSchema,
+	runtimeMachineRemoveResponseSchema,
+	runtimeMachineTestConnectionResponseSchema,
 	runtimeOpenFileRequestSchema,
 	runtimeOpenFileResponseSchema,
 	runtimeProjectAddRequestSchema,
@@ -369,6 +387,16 @@ export interface RuntimeTrpcContext {
 	};
 	hooksApi: {
 		ingest: (input: RuntimeHookIngestRequest) => Promise<RuntimeHookIngestResponse>;
+	};
+	machinesApi: {
+		list: () => Promise<RuntimeMachineListResponse>;
+		add: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineAddResponse>;
+		testConnection: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineTestConnectionResponse>;
+		connect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
+		disconnect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
+		remove: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineRemoveResponse>;
+		listDirectoryContents: (input: RuntimeMachineDirectoryListRequest) => Promise<RuntimeDirectoryListResponse>;
+		addProject: (input: RuntimeMachineProjectAddRequest) => Promise<RuntimeProjectAddResponse>;
 	};
 }
 
@@ -722,6 +750,53 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeHookIngestResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.hooksApi.ingest(input);
+			}),
+	}),
+	machines: t.router({
+		list: t.procedure.output(runtimeMachineListResponseSchema).query(async ({ ctx }) => {
+			return await ctx.machinesApi.list();
+		}),
+		add: t.procedure
+			.input(runtimeMachineConnectionInputSchema)
+			.output(runtimeMachineAddResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.add(input);
+			}),
+		testConnection: t.procedure
+			.input(runtimeMachineConnectionInputSchema)
+			.output(runtimeMachineTestConnectionResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.testConnection(input);
+			}),
+		connect: t.procedure
+			.input(runtimeMachineIdRequestSchema)
+			.output(runtimeMachineActionResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.connect(input);
+			}),
+		disconnect: t.procedure
+			.input(runtimeMachineIdRequestSchema)
+			.output(runtimeMachineActionResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.disconnect(input);
+			}),
+		remove: t.procedure
+			.input(runtimeMachineIdRequestSchema)
+			.output(runtimeMachineRemoveResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.remove(input);
+			}),
+		listDirectoryContents: t.procedure
+			.input(runtimeMachineDirectoryListRequestSchema)
+			.output(runtimeDirectoryListResponseSchema)
+			.query(async ({ ctx, input }) => {
+				return await ctx.machinesApi.listDirectoryContents(input);
+			}),
+		addProject: t.procedure
+			.input(runtimeMachineProjectAddRequestSchema)
+			.output(runtimeProjectAddResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.machinesApi.addProject(input);
 			}),
 	}),
 });

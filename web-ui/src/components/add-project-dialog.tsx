@@ -7,8 +7,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Dialog, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { useRemoteMachines } from "@/hooks/use-remote-machines";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import { toServerAbsolute } from "@/utils/server-path";
+
+const LOCAL_MACHINE_ID = "local";
 
 type AddProjectTab = "path" | "clone";
 
@@ -28,6 +31,11 @@ export function AddProjectDialog({
 	currentProjectId,
 	initialGitInitPath,
 }: AddProjectDialogProps): ReactElement {
+	const { machines, addProject: addRemoteProject } = useRemoteMachines();
+	const connectedMachines = machines.filter((machine) => machine.connectionStatus === "connected");
+	const [selectedMachineId, setSelectedMachineId] = useState<string>(LOCAL_MACHINE_ID);
+	const isRemote = selectedMachineId !== LOCAL_MACHINE_ID;
+
 	const [activeTab, setActiveTab] = useState<AddProjectTab>("path");
 	const [pathInput, setPathInput] = useState("");
 	const [isAddingByPath, setIsAddingByPath] = useState(false);
@@ -46,6 +54,7 @@ export function AddProjectDialog({
 			return;
 		}
 		setActiveTab("path");
+		setSelectedMachineId(LOCAL_MACHINE_ID);
 		setPathInput("/");
 		setGitUrlInput("");
 		setCloneDestInput("/");
@@ -100,19 +109,21 @@ export function AddProjectDialog({
 
 	const handleAddByPath = useCallback(
 		async (path: string, initializeGit = false) => {
-			const absolutePath = resolveToAbsolutePath(path);
-			if (!absolutePath) {
+			// Remote paths are absolute on the remote host and are used as typed;
+			// local paths are resolved against the local server root.
+			const trimmed = isRemote ? path.trim() : resolveToAbsolutePath(path);
+			if (!trimmed) {
 				return;
 			}
-			const trimmed = absolutePath;
 			if (initializeGit) {
 				setIsInitializingGit(true);
 			} else {
 				setIsAddingByPath(true);
 			}
 			try {
-				const trpcClient = getRuntimeTrpcClient(currentProjectId);
-				const added = await trpcClient.projects.add.mutate({ path: trimmed, initializeGit });
+				const added = isRemote
+					? await addRemoteProject({ machineId: selectedMachineId, path: trimmed, initializeGit })
+					: await getRuntimeTrpcClient(currentProjectId).projects.add.mutate({ path: trimmed, initializeGit });
 				if (!added.ok || !added.project) {
 					if (added.requiresGitInitialization) {
 						setPendingGitInitPath(trimmed);
@@ -131,7 +142,15 @@ export function AddProjectDialog({
 				setIsInitializingGit(false);
 			}
 		},
-		[currentProjectId, onOpenChange, onProjectAdded, resolveToAbsolutePath],
+		[
+			addRemoteProject,
+			currentProjectId,
+			isRemote,
+			onOpenChange,
+			onProjectAdded,
+			resolveToAbsolutePath,
+			selectedMachineId,
+		],
 	);
 
 	// Initialize git and add a project using an already-absolute path.
@@ -142,8 +161,12 @@ export function AddProjectDialog({
 		async (absolutePath: string) => {
 			setIsInitializingGit(true);
 			try {
-				const trpcClient = getRuntimeTrpcClient(currentProjectId);
-				const added = await trpcClient.projects.add.mutate({ path: absolutePath, initializeGit: true });
+				const added = isRemote
+					? await addRemoteProject({ machineId: selectedMachineId, path: absolutePath, initializeGit: true })
+					: await getRuntimeTrpcClient(currentProjectId).projects.add.mutate({
+							path: absolutePath,
+							initializeGit: true,
+						});
 				if (!added.ok || !added.project) {
 					throw new Error(added.error ?? "Could not add project.");
 				}
@@ -157,7 +180,7 @@ export function AddProjectDialog({
 				setIsInitializingGit(false);
 			}
 		},
-		[currentProjectId, onOpenChange, onProjectAdded],
+		[addRemoteProject, currentProjectId, isRemote, onOpenChange, onProjectAdded, selectedMachineId],
 	);
 
 	const handleClone = useCallback(async () => {
@@ -167,12 +190,18 @@ export function AddProjectDialog({
 		}
 		setIsCloning(true);
 		try {
-			const trpcClient = getRuntimeTrpcClient(currentProjectId);
 			const mutationInput: { gitUrl: string; path?: string } = { gitUrl: trimmedUrl };
 			const trimmedDest = cloneDestInput.trim();
 			const trimmedFolder = cloneFolderName.trim();
 
-			if (trimmedDest && trimmedDest !== "/") {
+			if (isRemote) {
+				// Remote clone destination is an absolute path on the remote host.
+				if (trimmedDest && trimmedDest !== "/") {
+					mutationInput.path = trimmedFolder ? `${trimmedDest.replace(/\/+$/, "")}/${trimmedFolder}` : trimmedDest;
+				} else if (trimmedFolder) {
+					mutationInput.path = trimmedFolder;
+				}
+			} else if (trimmedDest && trimmedDest !== "/") {
 				// Append custom folder name to the destination if provided
 				const resolvedDest = resolveToAbsolutePath(trimmedDest);
 				mutationInput.path = trimmedFolder ? toServerAbsolute(resolvedDest, trimmedFolder) : resolvedDest;
@@ -180,7 +209,9 @@ export function AddProjectDialog({
 				// Custom folder name with default destination (server root)
 				mutationInput.path = serverRootPath ? toServerAbsolute(serverRootPath, trimmedFolder) : trimmedFolder;
 			}
-			const added = await trpcClient.projects.add.mutate(mutationInput);
+			const added = isRemote
+				? await addRemoteProject({ machineId: selectedMachineId, ...mutationInput })
+				: await getRuntimeTrpcClient(currentProjectId).projects.add.mutate(mutationInput);
 			if (!added.ok || !added.project) {
 				throw new Error(added.error ?? "Clone failed.");
 			}
@@ -194,13 +225,16 @@ export function AddProjectDialog({
 			setIsCloning(false);
 		}
 	}, [
+		addRemoteProject,
 		cloneDestInput,
 		cloneFolderName,
 		currentProjectId,
 		gitUrlInput,
+		isRemote,
 		onOpenChange,
 		onProjectAdded,
 		resolveToAbsolutePath,
+		selectedMachineId,
 		serverRootPath,
 	]);
 
@@ -239,6 +273,29 @@ export function AddProjectDialog({
 				{/* Plain div instead of DialogBody so the autocomplete dropdown
 				    isn't clipped by DialogBody's default overflow-y-auto */}
 				<div className="flex flex-col gap-4 p-4 bg-surface-1">
+					{/* Machine selector — Local plus any connected remote machines. */}
+					<div>
+						<span className="block text-[12px] text-text-secondary mb-1.5">Machine</span>
+						<select
+							value={selectedMachineId}
+							onChange={(event) => {
+								setSelectedMachineId(event.target.value);
+								setPendingGitInitPath(null);
+								setPathInput(event.target.value === LOCAL_MACHINE_ID ? "/" : "");
+								setCloneDestInput(event.target.value === LOCAL_MACHINE_ID ? "/" : "");
+							}}
+							disabled={isBusy}
+							className="w-full h-8 px-2.5 text-[13px] rounded-md border border-border bg-surface-2 text-text-primary focus:outline-none focus:border-accent"
+						>
+							<option value={LOCAL_MACHINE_ID}>This machine (local)</option>
+							{connectedMachines.map((machine) => (
+								<option key={machine.id} value={machine.id}>
+									{machine.name} ({machine.username}@{machine.host})
+								</option>
+							))}
+						</select>
+					</div>
+
 					{/* Tab switcher */}
 					<div className="rounded-md bg-surface-2 p-1">
 						<div className="grid grid-cols-2 gap-1">
@@ -258,7 +315,7 @@ export function AddProjectDialog({
 								)}
 							>
 								<Search size={12} />
-								Server Path
+								{isRemote ? "Path" : "Server Path"}
 							</button>
 							<button
 								type="button"
@@ -297,6 +354,7 @@ export function AddProjectDialog({
 								if (pendingGitInitPath) void handleInitializeGit(pendingGitInitPath);
 							}}
 							currentProjectId={currentProjectId}
+							isRemote={isRemote}
 						/>
 					) : (
 						<CloneTabContent
@@ -310,6 +368,7 @@ export function AddProjectDialog({
 							isCloning={isCloning}
 							onSubmitClone={() => void handleClone()}
 							currentProjectId={currentProjectId}
+							isRemote={isRemote}
 						/>
 					)}
 				</div>
@@ -322,7 +381,7 @@ export function AddProjectDialog({
 							<Button
 								variant="primary"
 								onClick={() => void handleAddByPath(pathInput)}
-								disabled={pathInput.trim() === "/" || isAddingByPath}
+								disabled={!pathInput.trim() || pathInput.trim() === "/" || isAddingByPath}
 							>
 								{isAddingByPath ? (
 									<>
@@ -351,7 +410,7 @@ export function AddProjectDialog({
 								)}
 							</Button>
 						)
-					) : (
+					) : activeTab === "clone" ? (
 						<Button
 							variant="primary"
 							onClick={() => void handleClone()}
@@ -366,7 +425,7 @@ export function AddProjectDialog({
 								"Clone & Add"
 							)}
 						</Button>
-					)}
+					) : null}
 				</DialogFooter>
 			</Dialog>
 		</>
@@ -383,6 +442,7 @@ function PathTabContent({
 	onSubmitPath,
 	onSubmitGitInit,
 	currentProjectId,
+	isRemote,
 }: {
 	pathInput: string;
 	setPathInput: (value: string) => void;
@@ -393,6 +453,7 @@ function PathTabContent({
 	onSubmitPath: () => void;
 	onSubmitGitInit: () => void;
 	currentProjectId: string | null;
+	isRemote: boolean;
 }): ReactElement {
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -406,17 +467,32 @@ function PathTabContent({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-3">
 			<div>
-				<span className="block text-[12px] text-text-secondary mb-1.5">Directory path</span>
-				<DirectoryAutocomplete
-					inputRef={pathInputRef}
-					value={pathInput}
-					onChange={setPathInput}
-					placeholder="Search directories…"
-					disabled={isAddingByPath || isInitializingGit}
-					id="add-project-path-input"
-					ariaLabel="Server path input"
-					workspaceId={currentProjectId}
-				/>
+				<span className="block text-[12px] text-text-secondary mb-1.5">
+					{isRemote ? "Repository path on the remote machine" : "Directory path"}
+				</span>
+				{isRemote ? (
+					<input
+						ref={pathInputRef}
+						type="text"
+						value={pathInput}
+						onChange={(event) => setPathInput(event.target.value)}
+						placeholder="/home/user/my-repo"
+						disabled={isAddingByPath || isInitializingGit}
+						className="w-full h-8 px-2.5 text-[13px] font-mono rounded-md border border-border bg-surface-2 text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+						aria-label="Remote path input"
+					/>
+				) : (
+					<DirectoryAutocomplete
+						inputRef={pathInputRef}
+						value={pathInput}
+						onChange={setPathInput}
+						placeholder="Search directories…"
+						disabled={isAddingByPath || isInitializingGit}
+						id="add-project-path-input"
+						ariaLabel="Server path input"
+						workspaceId={currentProjectId}
+					/>
+				)}
 			</div>
 			{pendingGitInitPath !== null ? (
 				<div className="rounded-md border border-status-orange/30 bg-status-orange/5 px-3 py-2.5 flex flex-col gap-2">
@@ -467,6 +543,7 @@ function CloneTabContent({
 	isCloning,
 	onSubmitClone,
 	currentProjectId,
+	isRemote,
 }: {
 	gitUrlInput: string;
 	setGitUrlInput: (value: string) => void;
@@ -478,6 +555,7 @@ function CloneTabContent({
 	isCloning: boolean;
 	onSubmitClone: () => void;
 	currentProjectId: string | null;
+	isRemote: boolean;
 }): ReactElement {
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -507,15 +585,27 @@ function CloneTabContent({
 			<div className="grid grid-cols-2 gap-2">
 				<div>
 					<span className="block text-[12px] text-text-secondary mb-1.5">Clone into</span>
-					<DirectoryAutocomplete
-						value={cloneDestInput}
-						onChange={setCloneDestInput}
-						placeholder="Search directories…"
-						disabled={isCloning}
-						id="add-project-clone-dest-input"
-						ariaLabel="Clone destination path"
-						workspaceId={currentProjectId}
-					/>
+					{isRemote ? (
+						<input
+							type="text"
+							value={cloneDestInput}
+							onChange={(event) => setCloneDestInput(event.target.value)}
+							placeholder="/home/user"
+							disabled={isCloning}
+							className="w-full h-8 px-2.5 text-[13px] font-mono rounded-md border border-border bg-surface-2 text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+							aria-label="Remote clone destination path"
+						/>
+					) : (
+						<DirectoryAutocomplete
+							value={cloneDestInput}
+							onChange={setCloneDestInput}
+							placeholder="Search directories…"
+							disabled={isCloning}
+							id="add-project-clone-dest-input"
+							ariaLabel="Clone destination path"
+							workspaceId={currentProjectId}
+						/>
+					)}
 				</div>
 				<div>
 					<label htmlFor="add-project-folder-name-input" className="block text-[12px] text-text-secondary mb-1.5">

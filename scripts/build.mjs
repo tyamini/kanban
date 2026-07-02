@@ -3,9 +3,11 @@ import * as esbuild from "esbuild";
 /**
  * Runtime externals. `node-pty` is a native addon with a compiled binding
  * and a spawn-helper binary that must live on disk, so it can't be bundled.
+ * `ssh2` (remote-machine federation) ships a compiled `sshcrypto.node` binding
+ * and optionally loads `cpu-features`, so it must stay external too.
  * Everything else esbuild can inline.
  */
-const external = ["node-pty"];
+const external = ["node-pty", "ssh2", "cpu-features"];
 
 /** Bake OTEL telemetry env vars into the bundle at build time. */
 const define = {

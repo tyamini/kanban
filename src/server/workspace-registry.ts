@@ -6,6 +6,7 @@ import type {
 	RuntimeProjectTaskCounts,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
+import { mergeFederatedProjectSummaries } from "../remote/remote-projects-federation";
 import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceBoardById,
@@ -16,6 +17,17 @@ import {
 	removeWorkspaceStateFiles,
 } from "../state/workspace-state";
 import { TerminalSessionManager } from "../terminal/session-manager";
+
+/**
+ * Optional federation surface. When present, the registry merges remote project
+ * summaries into the unified list and defers remote workspace state to the
+ * machine manager instead of the local filesystem.
+ */
+export interface RemoteProjectsFederation {
+	isRemoteWorkspaceId: (workspaceId: string) => boolean;
+	listRemoteProjectSummaries: () => RuntimeProjectSummary[];
+	getWorkspaceState: (hubWorkspaceId: string) => Promise<RuntimeWorkspaceStateResponse | null>;
+}
 
 export interface WorkspaceRegistryScope {
 	workspaceId: string;
@@ -29,6 +41,7 @@ export interface CreateWorkspaceRegistryDependencies {
 	hasGitRepository: (path: string) => boolean;
 	pathIsDirectory: (path: string) => Promise<boolean>;
 	onTerminalManagerReady?: (workspaceId: string, manager: TerminalSessionManager) => void;
+	remoteProjects?: RemoteProjectsFederation;
 }
 
 export interface DisposeWorkspaceRegistryOptions {
@@ -316,6 +329,13 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		workspaceId: string,
 		workspacePath: string,
 	): Promise<RuntimeWorkspaceStateResponse> => {
+		if (deps.remoteProjects?.isRemoteWorkspaceId(workspaceId)) {
+			const remoteState = await deps.remoteProjects.getWorkspaceState(workspaceId);
+			if (!remoteState) {
+				throw new Error(`Remote workspace ${workspaceId} is not available.`);
+			}
+			return remoteState;
+		}
 		const response = await loadWorkspaceState(workspacePath);
 		const terminalManager = await ensureTerminalManagerForWorkspace(workspaceId, workspacePath);
 		for (const summary of terminalManager.listSummaries()) {
@@ -326,16 +346,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 
 	const buildProjectsPayload = async (preferredCurrentProjectId: string | null) => {
 		const projects = await listWorkspaceIndexEntries();
-		const fallbackProjectId =
-			projects.find((project) => project.workspaceId === activeWorkspaceId)?.workspaceId ??
-			projects[0]?.workspaceId ??
-			null;
-		const resolvedCurrentProjectId =
-			(preferredCurrentProjectId &&
-				projects.some((project) => project.workspaceId === preferredCurrentProjectId) &&
-				preferredCurrentProjectId) ||
-			fallbackProjectId;
-		const projectSummaries = await Promise.all(
+		const localSummaries = await Promise.all(
 			projects.map(async (project) => {
 				const taskCounts = await summarizeProjectTaskCounts(project.workspaceId, project.repoPath);
 				return toProjectSummary({
@@ -345,6 +356,17 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 				});
 			}),
 		);
+		const remoteSummaries = deps.remoteProjects?.listRemoteProjectSummaries() ?? [];
+		const projectSummaries = mergeFederatedProjectSummaries(localSummaries, remoteSummaries);
+
+		const fallbackProjectId =
+			projects.find((project) => project.workspaceId === activeWorkspaceId)?.workspaceId ??
+			projects[0]?.workspaceId ??
+			null;
+		const preferredExists =
+			preferredCurrentProjectId != null &&
+			projectSummaries.some((project) => project.id === preferredCurrentProjectId);
+		const resolvedCurrentProjectId = (preferredExists && preferredCurrentProjectId) || fallbackProjectId;
 		return {
 			currentProjectId: resolvedCurrentProjectId,
 			projects: projectSummaries,
@@ -357,6 +379,21 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			onRemovedWorkspace?: (workspace: RemovedWorkspaceNotice) => void;
 		},
 	): Promise<ResolvedWorkspaceStreamTarget> => {
+		// Remote workspaces live on another machine; skip local disk pruning and
+		// active-workspace bookkeeping and hand the id straight back so the state
+		// hub can proxy/forward it.
+		if (requestedWorkspaceId && deps.remoteProjects?.isRemoteWorkspaceId(requestedWorkspaceId)) {
+			const remoteSummary = deps.remoteProjects
+				.listRemoteProjectSummaries()
+				.find((project) => project.id === requestedWorkspaceId);
+			return {
+				workspaceId: requestedWorkspaceId,
+				workspacePath: remoteSummary?.path ?? null,
+				removedRequestedWorkspacePath: null,
+				didPruneProjects: false,
+			};
+		}
+
 		const allProjects = await listWorkspaceIndexEntries();
 		const existingProjects: RuntimeWorkspaceIndexEntry[] = [];
 		const removedProjects: RuntimeWorkspaceIndexEntry[] = [];

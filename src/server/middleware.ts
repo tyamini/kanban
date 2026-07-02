@@ -21,6 +21,18 @@ export interface CorsGateInput {
 
 const isDev = process.env.NODE_ENV === "development";
 
+/**
+ * When set, host-header and CORS origin enforcement are relaxed. This is used
+ * for a Kanban runtime that is bound to loopback on a remote machine and only
+ * reachable through an authenticated SSH tunnel from the federation hub: the
+ * tunnel's local port never matches the runtime's own port, so the standard
+ * DNS-rebinding/CORS checks would reject every proxied request. SSH is the
+ * trust boundary in that setup.
+ */
+export function isLocalTunnelTrusted(): boolean {
+	return process.env.KANBAN_TRUST_TUNNEL === "1";
+}
+
 export function evaluateCors(input: CorsGateInput): CorsDecision {
 	const origin = input.originHeader || null;
 	const isPreflight = input.method === "OPTIONS";
@@ -144,12 +156,15 @@ function rejectSocket(socket: Duplex): { end: boolean } {
 }
 
 export function handleHttpRequest(req: IncomingMessage, res: ServerResponse): { end: boolean } {
-	const hostDecision = evaluateHost({
-		hostHeader: req.headers.host,
-		allowedHosts: getAllowedHostHeaders(),
-	});
-	if (hostDecision.kind === "reject") {
-		return rejectRequest(res, "Host not allowed.");
+	const trusted = isLocalTunnelTrusted();
+	if (!trusted) {
+		const hostDecision = evaluateHost({
+			hostHeader: req.headers.host,
+			allowedHosts: getAllowedHostHeaders(),
+		});
+		if (hostDecision.kind === "reject") {
+			return rejectRequest(res, "Host not allowed.");
+		}
 	}
 
 	const corsDecision = evaluateCors({
@@ -176,12 +191,20 @@ export function handleHttpRequest(req: IncomingMessage, res: ServerResponse): { 
 			return { end: true };
 		}
 		case "reject": {
+			// A tunnel-trusted runtime accepts proxied requests whose Origin is the
+			// federation hub (the browser only ever talks to the hub, same-origin).
+			if (trusted) {
+				return { end: false };
+			}
 			return rejectRequest(res, "Origin not allowed.");
 		}
 	}
 }
 
 export function handleSocketUpgrade(request: IncomingMessage, socket: Duplex): { end: boolean } {
+	if (isLocalTunnelTrusted()) {
+		return { end: false };
+	}
 	const hostDecision = evaluateHost({
 		hostHeader: request.headers.host,
 		allowedHosts: getAllowedHostHeaders(),

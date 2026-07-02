@@ -358,11 +358,25 @@ export const runtimeProjectTaskCountsSchema = z.object({
 });
 export type RuntimeProjectTaskCounts = z.infer<typeof runtimeProjectTaskCountsSchema>;
 
+export const runtimeMachineConnectionStatusSchema = z.enum([
+	"connected",
+	"connecting",
+	"bootstrapping",
+	"disconnected",
+	"error",
+]);
+export type RuntimeMachineConnectionStatus = z.infer<typeof runtimeMachineConnectionStatusSchema>;
+
 export const runtimeProjectSummarySchema = z.object({
 	id: z.string(),
 	path: z.string(),
 	name: z.string(),
 	taskCounts: runtimeProjectTaskCountsSchema,
+	/** Set when the project lives on a remote machine (federation). */
+	machineId: z.string().nullable().optional(),
+	machineName: z.string().nullable().optional(),
+	isRemote: z.boolean().optional(),
+	connectionStatus: runtimeMachineConnectionStatusSchema.nullable().optional(),
 });
 export type RuntimeProjectSummary = z.infer<typeof runtimeProjectSummarySchema>;
 
@@ -559,6 +573,99 @@ export const runtimeProjectRemoveResponseSchema = z.object({
 	error: z.string().optional(),
 });
 export type RuntimeProjectRemoveResponse = z.infer<typeof runtimeProjectRemoveResponseSchema>;
+
+// ── Remote machines (SSH federation) ────────────────────────────────────────
+
+export const runtimeMachineAuthMethodSchema = z.enum(["password", "key", "agent"]);
+export type RuntimeMachineAuthMethod = z.infer<typeof runtimeMachineAuthMethodSchema>;
+
+export const runtimeMachineSummarySchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	host: z.string(),
+	port: z.number().int().positive(),
+	username: z.string(),
+	authMethod: runtimeMachineAuthMethodSchema,
+	connectionStatus: runtimeMachineConnectionStatusSchema,
+	statusMessage: z.string().nullable(),
+	/** Rolling progress/log lines for the current connection attempt. */
+	statusLog: z.array(z.string()).default([]),
+	projectCount: z.number().int().nonnegative(),
+	/** Whether a secret (password/passphrase) is currently held in memory for reconnects. */
+	hasStoredSecret: z.boolean(),
+	lastConnectedAt: z.number().nullable(),
+});
+export type RuntimeMachineSummary = z.infer<typeof runtimeMachineSummarySchema>;
+
+/** Credentials/connection details shared by add + test-connection requests. */
+export const runtimeMachineConnectionInputSchema = z.object({
+	name: z.string().min(1),
+	host: z.string().min(1),
+	port: z.number().int().positive().optional(),
+	username: z.string().min(1),
+	authMethod: runtimeMachineAuthMethodSchema.optional(),
+	password: z.string().optional(),
+	privateKeyPath: z.string().optional(),
+	passphrase: z.string().optional(),
+	/** When true, keep the secret in memory so the hub can reconnect automatically. */
+	rememberSecret: z.boolean().optional(),
+});
+export type RuntimeMachineConnectionInput = z.infer<typeof runtimeMachineConnectionInputSchema>;
+
+export const runtimeMachineListResponseSchema = z.object({
+	machines: z.array(runtimeMachineSummarySchema),
+});
+export type RuntimeMachineListResponse = z.infer<typeof runtimeMachineListResponseSchema>;
+
+export const runtimeMachineAddResponseSchema = z.object({
+	ok: z.boolean(),
+	machine: runtimeMachineSummarySchema.nullable(),
+	error: z.string().optional(),
+});
+export type RuntimeMachineAddResponse = z.infer<typeof runtimeMachineAddResponseSchema>;
+
+export const runtimeMachineTestConnectionResponseSchema = z.object({
+	ok: z.boolean(),
+	nodeVersion: z.string().nullable(),
+	nodeSatisfiesMinimum: z.boolean(),
+	kanbanRuntimeAvailable: z.boolean(),
+	error: z.string().optional(),
+});
+export type RuntimeMachineTestConnectionResponse = z.infer<typeof runtimeMachineTestConnectionResponseSchema>;
+
+export const runtimeMachineIdRequestSchema = z.object({
+	machineId: z.string(),
+});
+export type RuntimeMachineIdRequest = z.infer<typeof runtimeMachineIdRequestSchema>;
+
+export const runtimeMachineActionResponseSchema = z.object({
+	ok: z.boolean(),
+	machine: runtimeMachineSummarySchema.nullable(),
+	error: z.string().optional(),
+});
+export type RuntimeMachineActionResponse = z.infer<typeof runtimeMachineActionResponseSchema>;
+
+export const runtimeMachineRemoveResponseSchema = z.object({
+	ok: z.boolean(),
+	error: z.string().optional(),
+});
+export type RuntimeMachineRemoveResponse = z.infer<typeof runtimeMachineRemoveResponseSchema>;
+
+export const runtimeMachineDirectoryListRequestSchema = z.object({
+	machineId: z.string(),
+	path: z.string().optional(),
+});
+export type RuntimeMachineDirectoryListRequest = z.infer<typeof runtimeMachineDirectoryListRequestSchema>;
+
+export const runtimeMachineProjectAddRequestSchema = z
+	.object({
+		machineId: z.string(),
+		path: z.string().optional(),
+		gitUrl: z.string().optional(),
+		initializeGit: z.boolean().optional(),
+	})
+	.refine((data) => data.path || data.gitUrl, { message: "Either path or gitUrl is required" });
+export type RuntimeMachineProjectAddRequest = z.infer<typeof runtimeMachineProjectAddRequestSchema>;
 
 export const runtimeWorktreeEnsureRequestSchema = z.object({
 	taskId: z.string(),

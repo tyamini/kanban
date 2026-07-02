@@ -3,6 +3,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronDown, ChevronUp, Ellipsis, ExternalLink, Info, Lightbulb, Plus, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { canShowFeaturebaseFeedbackButton } from "@/components/featurebase-feedback-button";
+import { MachinesPanel } from "@/components/machines-panel";
 import { Button } from "@/components/ui/button";
 import { ClineIcon } from "@/components/ui/cline-icon";
 import { cn } from "@/components/ui/cn";
@@ -20,7 +21,12 @@ import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import type { FeaturebaseFeedbackState } from "@/hooks/use-featurebase-feedback-widget";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import type { RuntimeAgentId, RuntimeClineProviderSettings, RuntimeProjectSummary } from "@/runtime/types";
+import type {
+	RuntimeAgentId,
+	RuntimeClineProviderSettings,
+	RuntimeMachineConnectionStatus,
+	RuntimeProjectSummary,
+} from "@/runtime/types";
 import {
 	LocalStorageKey,
 	readLocalStorageItem,
@@ -69,8 +75,8 @@ export function ProjectNavigationPanel({
 	isLoadingProjects?: boolean;
 	currentProjectId: string | null;
 	removingProjectId: string | null;
-	activeSection: "projects" | "agent";
-	onActiveSectionChange: (section: "projects" | "agent") => void;
+	activeSection: "machines" | "projects" | "agent";
+	onActiveSectionChange: (section: "machines" | "projects" | "agent") => void;
 	canShowAgentSection: boolean;
 	agentSectionContent?: ReactNode;
 	selectedAgentId?: RuntimeAgentId | null;
@@ -85,6 +91,8 @@ export function ProjectNavigationPanel({
 	setSidebarCollapsed: (collapsed: boolean, persist?: boolean) => void;
 }): React.ReactElement {
 	const sortedProjects = [...projects].sort((a, b) => a.path.localeCompare(b.path));
+	const localProjects = sortedProjects.filter((project) => !project.isRemote);
+	const remoteMachineGroups = groupRemoteProjectsByMachine(sortedProjects);
 	const shouldShowFeaturebaseFeedback = canShowFeaturebaseFeedbackButton({
 		selectedAgentId,
 		clineProviderSettings,
@@ -314,7 +322,19 @@ export function ProjectNavigationPanel({
 					) : null}
 				</div>
 				<div className="mt-2 rounded-md bg-surface-2 border border-border p-1">
-					<div className="grid grid-cols-2 gap-1">
+					<div className="grid grid-cols-3 gap-1">
+						<button
+							type="button"
+							onClick={() => onActiveSectionChange("machines")}
+							className={cn(
+								"cursor-pointer rounded-sm px-2 py-1 text-xs font-medium",
+								activeSection === "machines"
+									? "bg-surface-4 text-text-primary border border-border"
+									: "text-text-secondary hover:text-text-primary border border-transparent",
+							)}
+						>
+							Machines
+						</button>
 						<button
 							type="button"
 							onClick={() => onActiveSectionChange("projects")}
@@ -339,11 +359,13 @@ export function ProjectNavigationPanel({
 								!canShowAgentSection ? "cursor-not-allowed opacity-50" : null,
 							)}
 						>
-							Kanban Agent
+							Agent
 						</button>
 					</div>
 				</div>
 			</div>
+
+			{activeSection === "machines" ? <MachinesPanel /> : null}
 
 			{activeSection === "projects" ? (
 				<>
@@ -359,7 +381,7 @@ export function ProjectNavigationPanel({
 							</div>
 						) : null}
 
-						{sortedProjects.map((project) => (
+						{localProjects.map((project) => (
 							<ProjectRow
 								key={project.id}
 								project={project}
@@ -379,6 +401,33 @@ export function ProjectNavigationPanel({
 									setPendingProjectRemoval(found);
 								}}
 							/>
+						))}
+
+						{remoteMachineGroups.map((group) => (
+							<div key={group.machineId} className="flex flex-col gap-1">
+								<MachineGroupHeader name={group.machineName} status={group.status} />
+								{group.projects.map((project) => (
+									<ProjectRow
+										key={project.id}
+										project={project}
+										isCurrent={currentProjectId === project.id}
+										removingProjectId={removingProjectId}
+										onSelect={(projectId) => {
+											onSelectProject(projectId);
+											if (isMobile) {
+												setCollapsed(true);
+											}
+										}}
+										onRemove={(projectId) => {
+											const found = sortedProjects.find((item) => item.id === projectId);
+											if (!found) {
+												return;
+											}
+											setPendingProjectRemoval(found);
+										}}
+									/>
+								))}
+							</div>
 						))}
 
 						{!isLoadingProjects ? (
@@ -647,6 +696,62 @@ function ShortcutsCard(): React.ReactElement {
 					</Collapsible.Trigger>
 				</Collapsible.Root>
 			</div>
+		</div>
+	);
+}
+
+interface RemoteMachineGroup {
+	machineId: string;
+	machineName: string;
+	status: RuntimeMachineConnectionStatus | null;
+	projects: RuntimeProjectSummary[];
+}
+
+function groupRemoteProjectsByMachine(projects: RuntimeProjectSummary[]): RemoteMachineGroup[] {
+	const groups = new Map<string, RemoteMachineGroup>();
+	for (const project of projects) {
+		if (!project.isRemote || !project.machineId) {
+			continue;
+		}
+		const existing = groups.get(project.machineId);
+		if (existing) {
+			existing.projects.push(project);
+			continue;
+		}
+		groups.set(project.machineId, {
+			machineId: project.machineId,
+			machineName: project.machineName ?? project.machineId,
+			status: project.connectionStatus ?? null,
+			projects: [project],
+		});
+	}
+	return Array.from(groups.values()).sort((a, b) => a.machineName.localeCompare(b.machineName));
+}
+
+const MACHINE_STATUS_DOT_CLASS: Record<RuntimeMachineConnectionStatus, string> = {
+	connected: "bg-status-green",
+	connecting: "bg-status-orange",
+	bootstrapping: "bg-status-orange",
+	disconnected: "bg-text-tertiary",
+	error: "bg-status-red",
+};
+
+function MachineGroupHeader({
+	name,
+	status,
+}: {
+	name: string;
+	status: RuntimeMachineConnectionStatus | null;
+}): React.ReactElement {
+	return (
+		<div className="flex items-center gap-1.5 px-2 pt-2 pb-0.5 text-[11px] font-medium uppercase tracking-wide text-text-tertiary">
+			<span
+				className={cn(
+					"inline-block h-1.5 w-1.5 rounded-full",
+					status ? MACHINE_STATUS_DOT_CLASS[status] : "bg-text-tertiary",
+				)}
+			/>
+			<span className="truncate">{name}</span>
 		</div>
 	);
 }

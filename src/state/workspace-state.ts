@@ -163,6 +163,46 @@ export function getRuntimeHomePath(): string {
 	return join(homedir(), RUNTIME_HOME_PARENT_DIR, RUNTIME_HOME_DIR);
 }
 
+/**
+ * Hub-side workspace IDs for projects that live on a remote machine are
+ * namespaced so they never collide with local workspace IDs and so the runtime
+ * server can tell where a request should be routed. The format is
+ * `remote::<machineId>::<nativeWorkspaceId>` where `machineId` is a slug that
+ * cannot contain the `::` separator and `nativeWorkspaceId` is the workspace ID
+ * as known by the remote runtime.
+ */
+const REMOTE_WORKSPACE_ID_PREFIX = "remote::";
+
+export interface ParsedRemoteWorkspaceId {
+	machineId: string;
+	nativeWorkspaceId: string;
+}
+
+export function isRemoteWorkspaceId(workspaceId: string): boolean {
+	return workspaceId.startsWith(REMOTE_WORKSPACE_ID_PREFIX);
+}
+
+export function buildRemoteWorkspaceId(machineId: string, nativeWorkspaceId: string): string {
+	return `${REMOTE_WORKSPACE_ID_PREFIX}${machineId}::${nativeWorkspaceId}`;
+}
+
+export function parseRemoteWorkspaceId(workspaceId: string): ParsedRemoteWorkspaceId | null {
+	if (!isRemoteWorkspaceId(workspaceId)) {
+		return null;
+	}
+	const remainder = workspaceId.slice(REMOTE_WORKSPACE_ID_PREFIX.length);
+	const separatorIndex = remainder.indexOf("::");
+	if (separatorIndex <= 0) {
+		return null;
+	}
+	const machineId = remainder.slice(0, separatorIndex);
+	const nativeWorkspaceId = remainder.slice(separatorIndex + 2);
+	if (!machineId || !nativeWorkspaceId) {
+		return null;
+	}
+	return { machineId, nativeWorkspaceId };
+}
+
 export function getTaskWorktreesHomePath(): string {
 	return join(homedir(), RUNTIME_HOME_PARENT_DIR, RUNTIME_WORKTREES_DIR);
 }

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import type { Socket } from "node:net";
 import { join } from "node:path";
 
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
@@ -24,6 +25,8 @@ import {
 	getKanbanRuntimeTls,
 	isKanbanRemoteHost,
 } from "../core/runtime-endpoint";
+import type { RemoteMachineManager } from "../remote/remote-machine-manager";
+import { createRemoteRuntimeProxy } from "../remote/remote-runtime-proxy";
 import {
 	checkRateLimit,
 	clearRateLimit,
@@ -36,11 +39,12 @@ import {
 	validatePasscode,
 	validateSession,
 } from "../security/passcode-manager";
-import { loadWorkspaceContextById } from "../state/workspace-state";
+import { isRemoteWorkspaceId, loadWorkspaceContextById } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
 import { createHooksApi } from "../trpc/hooks-api";
+import { createMachinesApi, type MachinesApi } from "../trpc/machines-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
@@ -75,6 +79,24 @@ export interface CreateRuntimeServerDependencies {
 	pickDirectoryPathFromSystemDialog: () => string | null;
 	getUpdateStatus: () => RuntimeUpdateStatusResponse;
 	runUpdateNow: () => Promise<RuntimeRunUpdateResponse>;
+	/** Remote-machine federation manager. When absent, remote features are disabled. */
+	machineManager?: RemoteMachineManager | null;
+}
+
+function createUnavailableMachinesApi(): MachinesApi {
+	const unavailable = () => {
+		throw new Error("Remote machines are not enabled on this server.");
+	};
+	return {
+		list: async () => ({ machines: [] }),
+		add: unavailable,
+		testConnection: unavailable,
+		connect: unavailable,
+		disconnect: unavailable,
+		remove: unavailable,
+		listDirectoryContents: unavailable,
+		addProject: unavailable,
+	};
 }
 
 export interface RuntimeServer {
@@ -110,6 +132,15 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		throw new Error("Could not find web UI assets. Run `npm run build` to generate and package the web UI.");
 	}
 
+	const machineManager = deps.machineManager ?? null;
+	const remoteRuntimeProxy = machineManager ? createRemoteRuntimeProxy({ warn: deps.warn }) : null;
+	const machinesApi: MachinesApi = machineManager
+		? createMachinesApi({
+				machineManager,
+				broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
+			})
+		: createUnavailableMachinesApi();
+
 	const resolveWorkspaceScopeFromRequest = async (
 		request: IncomingMessage,
 		requestUrl: URL,
@@ -121,6 +152,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		if (!requestedWorkspaceId) {
 			return {
 				requestedWorkspaceId: null,
+				workspaceScope: null,
+			};
+		}
+		if (isRemoteWorkspaceId(requestedWorkspaceId)) {
+			// Remote workspace-scoped calls are reverse-proxied before reaching the
+			// local tRPC handler; never resolve them against the local index.
+			return {
+				requestedWorkspaceId,
 				workspaceScope: null,
 			};
 		}
@@ -248,6 +287,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
 				broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
 			}),
+			machinesApi,
 		};
 	};
 
@@ -401,6 +441,21 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				return;
 			}
 			if (pathname.startsWith("/api/trpc")) {
+				// Reverse-proxy workspace-scoped tRPC calls for remote projects to the
+				// remote runtime; the hub only handles local + control-plane calls.
+				if (machineManager && remoteRuntimeProxy) {
+					const routingWorkspaceId = readWorkspaceIdFromRequest(req, requestUrl);
+					if (routingWorkspaceId && machineManager.isRemoteWorkspaceId(routingWorkspaceId)) {
+						const target = machineManager.resolveProxyTarget(routingWorkspaceId);
+						if (target) {
+							remoteRuntimeProxy.proxyHttp(req, res, target);
+						} else {
+							res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+							res.end('{"error":"Remote machine is not connected."}');
+						}
+						return;
+					}
+				}
 				await trpcHttpHandler(req, res);
 				return;
 			}
@@ -424,7 +479,40 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const server = tlsConfig
 		? createHttpsServer({ key: tlsConfig.key, cert: tlsConfig.cert }, requestHandler)
 		: createServer(requestHandler);
+	// Remote terminal WebSockets are proxied straight to the remote runtime.
+	// The state stream (`/api/runtime/ws`) is intentionally NOT proxied: the hub
+	// owns it so the project sidebar stays federated, and forwards remote deltas.
+	if (machineManager && remoteRuntimeProxy) {
+		server.on("upgrade", (request, socket, head) => {
+			let upgradeUrl: URL;
+			try {
+				upgradeUrl = new URL(request.url ?? "/", getKanbanRuntimeOrigin());
+			} catch {
+				return;
+			}
+			const upgradePathname = normalizeRequestPath(upgradeUrl.pathname);
+			const isTerminalUpgrade =
+				upgradePathname === "/api/terminal/io" || upgradePathname === "/api/terminal/control";
+			if (!isTerminalUpgrade) {
+				return;
+			}
+			const routingWorkspaceId = readWorkspaceIdFromRequest(request, upgradeUrl);
+			if (!routingWorkspaceId || !machineManager.isRemoteWorkspaceId(routingWorkspaceId)) {
+				return;
+			}
+			(request as IncomingMessage & { __kanbanUpgradeHandled?: boolean }).__kanbanUpgradeHandled = true;
+			const target = machineManager.resolveProxyTarget(routingWorkspaceId);
+			if (!target) {
+				socket.destroy();
+				return;
+			}
+			remoteRuntimeProxy.proxyWebSocket(request, socket as Socket, head, target);
+		});
+	}
 	server.on("upgrade", (request, socket, head) => {
+		if ((request as IncomingMessage & { __kanbanUpgradeHandled?: boolean }).__kanbanUpgradeHandled) {
+			return;
+		}
 		if (handleSocketUpgrade(request, socket).end) {
 			return;
 		}
@@ -507,6 +595,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			await clineWatcherRegistry.close();
 			await deps.runtimeStateHub.close();
 			await terminalWebSocketBridge.close();
+			remoteRuntimeProxy?.close();
 			await new Promise<void>((resolveClose, rejectClose) => {
 				server.close((error) => {
 					if (error) {

@@ -396,6 +396,7 @@ async function startServer(): Promise<{
 		{ shutdownRuntimeServer },
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
+		{ createRemoteMachineManager },
 	] = await Promise.all([
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
@@ -405,8 +406,17 @@ async function startServer(): Promise<{
 		import("./server/shutdown-coordinator.js"),
 		import("./server/workspace-registry.js"),
 		import("./update/update.js"),
+		import("./remote/remote-machine-manager.js"),
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
+	const machineManager = createRemoteMachineManager({
+		warn: (message) => {
+			console.warn(`[kanban] ${message}`);
+		},
+	});
+	machineManager.onChange(() => {
+		void runtimeStateHub?.broadcastRuntimeProjectsUpdated(null);
+	});
 	const workspaceRegistry = await createWorkspaceRegistry({
 		cwd: process.cwd(),
 		loadGlobalRuntimeConfig,
@@ -416,11 +426,25 @@ async function startServer(): Promise<{
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
 		},
+		remoteProjects: {
+			isRemoteWorkspaceId: machineManager.isRemoteWorkspaceId,
+			listRemoteProjectSummaries: machineManager.listRemoteProjectSummaries,
+			getWorkspaceState: machineManager.getWorkspaceState,
+		},
 	});
 	runtimeStateHub = createRuntimeStateHub({
 		workspaceRegistry,
+		remoteStreamGateway: {
+			isRemoteWorkspaceId: machineManager.isRemoteWorkspaceId,
+			subscribeWorkspaceStream: machineManager.subscribeWorkspaceStream,
+		},
 	});
 	const runtimeHub = runtimeStateHub;
+	// Best-effort auto-reconnect of key/agent machines; password machines wait
+	// for an explicit connect from the UI (their secret is not persisted).
+	void machineManager.initialize().catch((error) => {
+		console.warn(`[kanban] Failed to initialize remote machines: ${String(error)}`);
+	});
 	for (const { workspaceId, terminalManager } of workspaceRegistry.listManagedWorkspaces()) {
 		runtimeHub.trackTerminalManager(workspaceId, terminalManager);
 	}
@@ -457,6 +481,7 @@ async function startServer(): Promise<{
 		disposeWorkspace: disposeTrackedWorkspace,
 		collectProjectWorktreeTaskIdsForRemoval,
 		pickDirectoryPathFromSystemDialog,
+		machineManager,
 		getUpdateStatus: () => {
 			const notification = getPendingUpdateNotification();
 			if (!notification) {
@@ -501,6 +526,7 @@ async function startServer(): Promise<{
 
 	const close = async () => {
 		await runtimeServer.close();
+		await machineManager.close();
 	};
 
 	const shutdown = async (options?: { skipSessionCleanup?: boolean }) => {

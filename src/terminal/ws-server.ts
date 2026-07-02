@@ -377,8 +377,13 @@ export function createTerminalWebSocketBridge({
 
 	server.on("upgrade", (request, socket, head) => {
 		try {
-			(socket as Socket).setNoDelay(true);
 			const upgradeRequest = request as UpgradeRequest;
+			// A remote-workspace terminal upgrade may already have been hijacked by
+			// the remote proxy; never double-handle the same socket.
+			if (upgradeRequest.__kanbanUpgradeHandled) {
+				return;
+			}
+			(socket as Socket).setNoDelay(true);
 			const url = new URL(request.url ?? "/", getKanbanRuntimeOrigin());
 			const pathname = url.pathname;
 			const isIoRequest = isTerminalIoWebSocketPath(pathname);
