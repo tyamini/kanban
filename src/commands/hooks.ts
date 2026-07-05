@@ -9,6 +9,7 @@ import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
 import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
+import { enrichClaudeReviewMetadata } from "./hook-events/claude-hook-events";
 import {
 	type CodexMappedHookEvent,
 	resolveCodexRolloutFinalMessageForCwd,
@@ -499,7 +500,8 @@ async function runHooksNotify(
 		const stdinPayload = await readStdinText();
 		const parsedArgs = parseHooksIngestArgs(event, options, payloadArg, stdinPayload);
 		const codexEnrichedArgs = await enrichCodexReviewMetadata(parsedArgs, process.cwd());
-		const args = await enrichDroidReviewMetadata(codexEnrichedArgs);
+		const droidEnrichedArgs = await enrichDroidReviewMetadata(codexEnrichedArgs);
+		const args = await enrichClaudeReviewMetadata(droidEnrichedArgs);
 		await ingestHookEvent(args);
 	} catch {
 		// Best effort only.
@@ -721,7 +723,8 @@ async function runHooksIngest(
 		const stdinPayload = await readStdinText();
 		const parsedArgs = parseHooksIngestArgs(event, options, payloadArg, stdinPayload);
 		const codexEnrichedArgs = await enrichCodexReviewMetadata(parsedArgs, process.cwd());
-		args = await enrichDroidReviewMetadata(codexEnrichedArgs);
+		const droidEnrichedArgs = await enrichDroidReviewMetadata(codexEnrichedArgs);
+		args = await enrichClaudeReviewMetadata(droidEnrichedArgs);
 	} catch (error) {
 		process.stderr.write(`kanban hooks ingest: ${formatError(error)}\n`);
 		process.exitCode = 1;

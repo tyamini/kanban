@@ -91,6 +91,25 @@ function createWaitingForApprovalSessions(): Record<string, RuntimeTaskSessionSu
 	};
 }
 
+// Terminal Claude that ends its turn with a plain-text question: only the Stop
+// hook fires (to_review), with the final assistant message read from the
+// transcript. No structured permission/user_attention signal is present.
+function createStopQuestionSessions(): Record<string, RuntimeTaskSessionSummary> {
+	return {
+		"task-1": createSessionSummary({
+			latestHookActivity: {
+				activityText: "Final: Which database should I use, Postgres or SQLite?",
+				toolName: null,
+				toolInputSummary: null,
+				finalMessage: "Which database should I use, Postgres or SQLite?",
+				hookEventName: "Stop",
+				notificationType: null,
+				source: "claude",
+			},
+		}),
+	};
+}
+
 const workspaceSnapshots: Record<string, ReviewTaskWorkspaceSnapshot> = {
 	"task-1": {
 		taskId: "task-1",
@@ -247,6 +266,29 @@ describe("useReviewAutoActions", () => {
 				<HookHarness
 					board={createBoard(true, "done")}
 					sessions={createWaitingForApprovalSessions()}
+					runAutoReviewGitAction={runAutoReviewGitAction}
+					requestMoveTaskToTrash={requestMoveTaskToTrash}
+				/>,
+			);
+		});
+
+		await act(async () => {
+			vi.advanceTimersByTime(1000);
+		});
+
+		expect(requestMoveTaskToTrash).not.toHaveBeenCalled();
+		expect(runAutoReviewGitAction).not.toHaveBeenCalled();
+	});
+
+	it("does not move a 'done' mode task to done when the agent ends its turn with a question", async () => {
+		const runAutoReviewGitAction = vi.fn(async () => true);
+		const requestMoveTaskToTrash = vi.fn(async () => {});
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={createBoard(true, "done")}
+					sessions={createStopQuestionSessions()}
 					runAutoReviewGitAction={runAutoReviewGitAction}
 					requestMoveTaskToTrash={requestMoveTaskToTrash}
 				/>,

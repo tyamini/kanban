@@ -26,9 +26,24 @@ function isTaskAutoReviewEnabled(task: BoardCard): boolean {
 //   - activityText "Waiting for approval": Claude Code PermissionRequest hooks
 //     (incl. the AskUserQuestion tool) and codex approval requests, which leave
 //     notificationType null.
+//   - toolName is a dedicated "ask the user" tool that is mid-use.
+//   - the agent ended its turn with a plain-text question (finalMessage ends with
+//     "?"). Terminal agents that just ask and stop leave no structured signal, so
+//     this catches "asked a question -> stay in review" even in auto-done mode.
 // We read the *latest* activity, so once the user responds and the agent moves
 // on (PostToolUse / Stop / Final) the task is no longer considered blocked.
 const USER_RESPONSE_NOTIFICATION_TYPES = new Set(["user_attention", "permission_prompt", "permission.asked"]);
+const USER_ATTENTION_TOOL_NAMES = new Set(["AskUserQuestion", "ask_followup_question", "plan_mode_respond"]);
+
+function messageEndsWithQuestion(message: string | null | undefined): boolean {
+	if (!message) {
+		return false;
+	}
+	// Ignore trailing whitespace and common closers/emphasis so a genuine
+	// question is still detected when wrapped in markdown or quotes.
+	const trimmed = message.replace(/[\s>*_`"')\]]+$/g, "");
+	return trimmed.endsWith("?");
+}
 
 function isTaskAwaitingUserResponse(summary: RuntimeTaskSessionSummary | undefined): boolean {
 	const activity = summary?.latestHookActivity;
@@ -38,7 +53,19 @@ function isTaskAwaitingUserResponse(summary: RuntimeTaskSessionSummary | undefin
 	if (activity.notificationType && USER_RESPONSE_NOTIFICATION_TYPES.has(activity.notificationType)) {
 		return true;
 	}
-	return activity.activityText?.trim().startsWith("Waiting for approval") === true;
+	if (activity.activityText?.trim().startsWith("Waiting for approval") === true) {
+		return true;
+	}
+	if (
+		activity.toolName &&
+		USER_ATTENTION_TOOL_NAMES.has(activity.toolName) &&
+		activity.activityText?.trim().startsWith("Using ") === true
+	) {
+		return true;
+	}
+	// finalMessage is only populated at end-of-turn (Stop / task complete), so a
+	// trailing "?" reliably means the agent finished by asking the user something.
+	return messageEndsWithQuestion(activity.finalMessage);
 }
 
 interface TaskGitActionLoadingStateLike {

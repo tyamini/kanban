@@ -7,6 +7,7 @@ import type {
 	RuntimeWorktreeEnsureResponse,
 } from "../core/api-contract";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
+import { ensureProjectSkillLinks } from "../server/kanban-skills";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
@@ -386,6 +387,14 @@ async function syncIgnoredPathsIntoWorktree(repoPath: string, worktreePath: stri
 			isDirectory: sourceStat.isDirectory(),
 		});
 	}
+
+	// Agents run inside the worktree, not the main repo. The kanban skills
+	// (kanban-create-task, kanban-link-tasks, ...) are symlinked into the main
+	// repo's .claude/skills, but only reach the worktree if the project happens
+	// to git-ignore that path. Link them directly into the worktree so the skills
+	// are always available to the agent — including on remote/federated machines,
+	// which run this same code. Best-effort and idempotent.
+	await ensureProjectSkillLinks(worktreePath);
 }
 
 async function initializeSubmodulesIfNeeded(worktreePath: string): Promise<void> {
