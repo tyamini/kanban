@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	applyClineComposerCompletion,
 	buildMentionInsertText,
+	buildSlashCommandInsertText,
 	detectActiveClineComposerToken,
 } from "@/components/detail-panels/cline-chat-composer-completion";
 import { type InlineCompletionItem, InlineCompletionPicker } from "@/components/inline-completion-picker";
@@ -18,10 +19,12 @@ import { TaskImageStrip } from "@/components/task-image-strip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
+import type { RuntimeAgentId, RuntimeAgentSkill } from "@/runtime/types";
 import type { TaskImage } from "@/types";
 import { useDebouncedEffect } from "@/utils/react-use";
 
 const FILE_MENTION_LIMIT = 8;
+const SKILL_COMMAND_LIMIT = 8;
 const MENTION_QUERY_DEBOUNCE_MS = 120;
 const TEXTAREA_MAX_HEIGHT = 200;
 
@@ -39,6 +42,8 @@ interface TaskPromptComposerProps {
 	enabled?: boolean;
 	autoFocus?: boolean;
 	workspaceId?: string | null;
+	/** Effective agent for the task, used to resolve which skills the `/` autocomplete offers. */
+	agentId?: RuntimeAgentId | null;
 	showAttachImageButton?: boolean;
 }
 
@@ -56,15 +61,21 @@ export function TaskPromptComposer({
 	enabled = true,
 	autoFocus = false,
 	workspaceId = null,
+	agentId = null,
 	showAttachImageButton = true,
 }: TaskPromptComposerProps): ReactElement {
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const mentionSearchRequestIdRef = useRef(0);
+	const skillSearchRequestIdRef = useRef(0);
+	const skillCacheRef = useRef(new Map<string, RuntimeAgentSkill[]>());
 	const [cursorIndex, setCursorIndex] = useState(0);
 	const [mentionItems, setMentionItems] = useState<InlineCompletionItem[]>([]);
 	const [mentionInsertTextMap, setMentionInsertTextMap] = useState(new Map<string, string>());
 	const [isMentionSearchLoading, setIsMentionSearchLoading] = useState(false);
+	const [skillItems, setSkillItems] = useState<InlineCompletionItem[]>([]);
+	const [skillInsertTextMap, setSkillInsertTextMap] = useState(new Map<string, string>());
+	const [isSkillSearchLoading, setIsSkillSearchLoading] = useState(false);
 	const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
 	const [isSuggestionPickerOpen, setIsSuggestionPickerOpen] = useState(false);
 	const [isDragOver, setIsDragOver] = useState(false);
@@ -82,26 +93,26 @@ export function TaskPromptComposer({
 		autoResizeTextarea();
 	}, [autoResizeTextarea, value]);
 
-	const activeToken = useMemo(() => {
-		const token = detectActiveClineComposerToken(value, cursorIndex);
-		if (token && token.kind !== "mention") {
-			return null;
-		}
-		return token;
-	}, [cursorIndex, value]);
+	const activeToken = useMemo(() => detectActiveClineComposerToken(value, cursorIndex), [cursorIndex, value]);
 
 	useEffect(() => {
-		if (!enabled || !activeToken) {
+		if (!enabled || !activeToken || activeToken.kind !== "mention") {
 			mentionSearchRequestIdRef.current += 1;
 			setMentionItems([]);
 			setMentionInsertTextMap(new Map());
 			setIsMentionSearchLoading(false);
 		}
+		if (!enabled || !activeToken || activeToken.kind !== "slash") {
+			skillSearchRequestIdRef.current += 1;
+			setSkillItems([]);
+			setSkillInsertTextMap(new Map());
+			setIsSkillSearchLoading(false);
+		}
 	}, [activeToken, enabled, workspaceId]);
 
 	useDebouncedEffect(
 		() => {
-			if (!enabled || !activeToken || !workspaceId) {
+			if (!enabled || !activeToken || activeToken.kind !== "mention" || !workspaceId) {
 				return;
 			}
 			const requestId = ++mentionSearchRequestIdRef.current;
@@ -141,9 +152,73 @@ export function TaskPromptComposer({
 		[activeToken, enabled, workspaceId],
 	);
 
+	useDebouncedEffect(
+		() => {
+			if (!enabled || !activeToken || activeToken.kind !== "slash" || !workspaceId) {
+				return;
+			}
+			const requestKey = `${workspaceId}::${agentId ?? "__default__"}`;
+			const requestId = ++skillSearchRequestIdRef.current;
+			const applySkills = (skills: RuntimeAgentSkill[]) => {
+				const query = activeToken.query.trim().toLowerCase();
+				const insertMap = new Map<string, string>();
+				const items: InlineCompletionItem[] = skills
+					.filter((skill) => {
+						if (query.length === 0) {
+							return true;
+						}
+						const description = skill.description?.toLowerCase() ?? "";
+						return skill.name.toLowerCase().includes(query) || description.includes(query);
+					})
+					.slice(0, SKILL_COMMAND_LIMIT)
+					.map((skill) => {
+						insertMap.set(skill.name, buildSlashCommandInsertText(skill.name));
+						return { id: skill.name, label: `/${skill.name}`, detail: skill.description };
+					});
+				setSkillInsertTextMap(insertMap);
+				setSkillItems(items);
+			};
+
+			const cachedSkills = skillCacheRef.current.get(requestKey);
+			if (cachedSkills) {
+				applySkills(cachedSkills);
+				return;
+			}
+
+			setIsSkillSearchLoading(true);
+			void (async () => {
+				try {
+					const trpcClient = getRuntimeTrpcClient(workspaceId);
+					const payload = await trpcClient.workspace.listSkills.query({
+						agentId: agentId ?? undefined,
+					});
+					if (requestId !== skillSearchRequestIdRef.current) {
+						return;
+					}
+					skillCacheRef.current.set(requestKey, payload.skills);
+					applySkills(payload.skills);
+				} catch {
+					if (requestId === skillSearchRequestIdRef.current) {
+						setSkillItems([]);
+						setSkillInsertTextMap(new Map());
+					}
+				} finally {
+					if (requestId === skillSearchRequestIdRef.current) {
+						setIsSkillSearchLoading(false);
+					}
+				}
+			})();
+		},
+		MENTION_QUERY_DEBOUNCE_MS,
+		[activeToken, enabled, workspaceId, agentId],
+	);
+
 	const suggestions = useMemo(() => {
-		return enabled && activeToken ? mentionItems : [];
-	}, [activeToken, enabled, mentionItems]);
+		if (!enabled || !activeToken) {
+			return [];
+		}
+		return activeToken.kind === "mention" ? mentionItems : skillItems;
+	}, [activeToken, enabled, mentionItems, skillItems]);
 
 	useEffect(() => {
 		setSelectedSuggestionIndex(0);
@@ -170,7 +245,10 @@ export function TaskPromptComposer({
 			if (!activeToken) {
 				return;
 			}
-			const insertText = mentionInsertTextMap.get(item.id) ?? `@${item.id}`;
+			const insertText =
+				activeToken.kind === "mention"
+					? (mentionInsertTextMap.get(item.id) ?? `@${item.id}`)
+					: (skillInsertTextMap.get(item.id) ?? `/${item.id}`);
 			const next = applyClineComposerCompletion(value, activeToken, insertText);
 			onValueChange(next.value);
 			window.requestAnimationFrame(() => {
@@ -182,7 +260,7 @@ export function TaskPromptComposer({
 				setCursorIndex(next.cursor);
 			});
 		},
-		[activeToken, mentionInsertTextMap, onValueChange, value],
+		[activeToken, mentionInsertTextMap, skillInsertTextMap, onValueChange, value],
 	);
 
 	const handleTextareaKeyDown = useCallback(
@@ -351,6 +429,10 @@ export function TaskPromptComposer({
 	);
 
 	const showSuggestions = Boolean(enabled && isSuggestionPickerOpen && activeToken);
+	const isSlashToken = activeToken?.kind === "slash";
+	const suggestionsLoading = isSlashToken ? isSkillSearchLoading : isMentionSearchLoading;
+	const suggestionsLoadingMessage = isSlashToken ? "Loading skills..." : "Loading files...";
+	const suggestionsEmptyMessage = isSlashToken ? "No matching skills." : "No matching files.";
 
 	return (
 		<div>
@@ -361,9 +443,9 @@ export function TaskPromptComposer({
 					selectedIndex={selectedSuggestionIndex}
 					onSelectItem={applySuggestion}
 					onHoverItem={setSelectedSuggestionIndex}
-					isLoading={isMentionSearchLoading}
-					loadingMessage="Loading files..."
-					emptyMessage="No matching files."
+					isLoading={suggestionsLoading}
+					loadingMessage={suggestionsLoadingMessage}
+					emptyMessage={suggestionsEmptyMessage}
 				>
 					<textarea
 						id={id}

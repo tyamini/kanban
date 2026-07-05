@@ -9,6 +9,7 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceChangesMode,
 	RuntimeWorkspaceFileSearchResponse,
+	RuntimeWorkspaceSkillsResponse,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import {
@@ -26,6 +27,7 @@ import {
 } from "../workspace/get-workspace-changes";
 import { getCommitDiff, getGitLog, getGitRefs } from "../workspace/git-history";
 import { discardGitChanges, getGitSyncSummary, runGitCheckoutAction, runGitSyncAction } from "../workspace/git-sync";
+import { listAgentSkills } from "../workspace/list-agent-skills";
 import { searchWorkspaceFiles } from "../workspace/search-workspace-files";
 import {
 	deleteTaskWorktree,
@@ -349,6 +351,12 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				query,
 				files,
 			} satisfies RuntimeWorkspaceFileSearchResponse;
+		},
+		listSkills: async (workspaceScope, input) => {
+			const skills = await listAgentSkills(workspaceScope.workspacePath, input.agentId);
+			return {
+				skills,
+			} satisfies RuntimeWorkspaceSkillsResponse;
 		},
 		loadState: async (workspaceScope) => {
 			return await deps.buildWorkspaceStateSnapshot(workspaceScope.workspaceId, workspaceScope.workspacePath);

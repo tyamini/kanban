@@ -444,12 +444,15 @@ export function TaskCreateDialog({
 							placeholder="Describe the task..."
 							autoFocus
 							workspaceId={workspaceId}
+							agentId={agentId ?? defaultAgentId ?? null}
 							showAttachImageButton={false}
 						/>
 						<div className="flex items-center justify-between mt-1.5">
 							<p className="text-[11px] text-text-tertiary">
 								Use <code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">@file</code> to
-								reference files. Drag and drop or{" "}
+								reference files,{" "}
+								<code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">/</code> for skills.
+								Drag and drop or{" "}
 								<code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">
 									{pasteShortcutLabel}
 								</code>{" "}

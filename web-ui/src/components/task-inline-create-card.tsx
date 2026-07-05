@@ -241,11 +241,13 @@ export function TaskInlineCreateCard({
 					enabled={enabled}
 					autoFocus
 					workspaceId={workspaceId}
+					agentId={agentId ?? defaultAgentId ?? null}
 					showAttachImageButton={false}
 				/>
 				<p className="text-[11px] text-text-tertiary mt-1 mb-0">
 					Use <code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">@file</code> to reference
-					files. Drag and drop or{" "}
+					files, <code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">/</code> for skills. Drag
+					and drop or{" "}
 					<code className="rounded bg-surface-3 px-1 py-px font-mono text-[11px]">{pasteShortcutLabel}</code> to
 					add images.
 				</p>

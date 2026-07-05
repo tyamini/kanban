@@ -83,6 +83,26 @@ export const runtimeAgentIdSchema = z.enum([
 ]);
 export type RuntimeAgentId = z.infer<typeof runtimeAgentIdSchema>;
 
+export const runtimeAgentSkillSourceSchema = z.enum(["skill", "command"]);
+export type RuntimeAgentSkillSource = z.infer<typeof runtimeAgentSkillSourceSchema>;
+
+export const runtimeAgentSkillSchema = z.object({
+	name: z.string(),
+	description: z.string().optional(),
+	source: runtimeAgentSkillSourceSchema,
+});
+export type RuntimeAgentSkill = z.infer<typeof runtimeAgentSkillSchema>;
+
+export const runtimeWorkspaceSkillsRequestSchema = z.object({
+	agentId: runtimeAgentIdSchema.optional(),
+});
+export type RuntimeWorkspaceSkillsRequest = z.infer<typeof runtimeWorkspaceSkillsRequestSchema>;
+
+export const runtimeWorkspaceSkillsResponseSchema = z.object({
+	skills: z.array(runtimeAgentSkillSchema),
+});
+export type RuntimeWorkspaceSkillsResponse = z.infer<typeof runtimeWorkspaceSkillsResponseSchema>;
+
 const runtimeBoardColumnIdEnum = z.enum(["backlog", "in_progress", "review", "trash"]);
 export const runtimeBoardColumnIdSchema = z.preprocess(
 	(val) => (val === "done" ? "trash" : val),
