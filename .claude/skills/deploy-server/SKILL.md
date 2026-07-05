@@ -64,8 +64,12 @@ How "rebuild needed" is decided: no `dist/cli.js`, or any of `src/`,
 `web-ui/vite.config.ts`, or the `tsconfig*.json` files is newer than the built
 `dist/cli.js` (so edits and `git pull`/`merge`/`checkout` all trigger a rebuild).
 
-Defaults: binds `0.0.0.0:3484`, `--no-passcode`, allows hosts
-`tyamini-dev,10.10.73.144`, logs to `/tmp/kanban-server.log`.
+Defaults: binds `0.0.0.0:3484`, `--no-passcode`, logs to
+`/tmp/kanban-server.log`. The Host-header/CORS allowlist is **derived from the
+machine it runs on** (short + FQDN hostname and all bound IPv4 addresses, plus
+`localhost`/`127.0.0.1`) — nothing host-specific is hard-coded. `start` prints
+the effective allowlist. Override with `KANBAN_ALLOWED_HOSTS` only if you need an
+explicit list.
 
 Override via env, e.g.:
 
@@ -80,7 +84,7 @@ KANBAN_ALLOWED_HOSTS="my-host,10.0.0.5" scripts/serve-kanban.sh start
 | `KANBAN_PROJECT` | `~/hello-kanban` | git repo the board opens on |
 | `KANBAN_HOST` | `0.0.0.0` | bind interface |
 | `KANBAN_PORT` | `3484` | port |
-| `KANBAN_ALLOWED_HOSTS` | `tyamini-dev,10.10.73.144` | extra Host-header/CORS allowlist |
+| `KANBAN_ALLOWED_HOSTS` | this machine's hostname(s) + IPs | Host-header/CORS allowlist (auto-detected) |
 | `KANBAN_LOG` | `/tmp/kanban-server.log` | server log path |
 | `KANBAN_PASSCODE_FLAG` | `--no-passcode` | set to `""` to require the generated passcode |
 
@@ -88,7 +92,7 @@ KANBAN_ALLOWED_HOSTS="my-host,10.0.0.5" scripts/serve-kanban.sh start
 
 ```bash
 scripts/serve-kanban.sh status
-curl -s -o /dev/null -w "%{http_code}\n" -H "Host: tyamini-dev:3484" http://127.0.0.1:3484/   # expect 200
+curl -s -o /dev/null -w "%{http_code}\n" -H "Host: $(hostname -s):3484" http://127.0.0.1:3484/   # expect 200
 ```
 
 Then open `http://<KANBAN_HOST-or-hostname>:<KANBAN_PORT>/<project>` in a browser.

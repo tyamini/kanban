@@ -12,7 +12,7 @@
 #   KANBAN_PROJECT         git repo the board opens on   (default: $HOME/hello-kanban)
 #   KANBAN_HOST            bind interface                (default: 0.0.0.0)
 #   KANBAN_PORT            port                          (default: 3484)
-#   KANBAN_ALLOWED_HOSTS   extra Host header allowlist   (default: tyamini-dev,10.10.73.144)
+#   KANBAN_ALLOWED_HOSTS   extra Host header allowlist   (default: this machine's hostname(s) + IPs)
 #   KANBAN_LOG             server log path               (default: /tmp/kanban-server.log)
 #   KANBAN_PASSCODE_FLAG   set to "" to ENABLE the auto-generated remote passcode
 set -uo pipefail
@@ -20,11 +20,25 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI="$REPO_ROOT/dist/cli.js"
 
+# Derive the Host-header/CORS allowlist from THIS machine (short + FQDN hostname
+# and all bound IPv4 addresses) so the deploy isn't tied to any one developer's
+# host. `localhost`/`127.0.0.1` are always included. Override with
+# KANBAN_ALLOWED_HOSTS to set an explicit list.
+detect_allowed_hosts() {
+	{
+		echo "localhost"
+		echo "127.0.0.1"
+		hostname -s 2>/dev/null
+		hostname -f 2>/dev/null
+		hostname -I 2>/dev/null | tr ' ' '\n'
+	} | awk 'NF && !seen[$0]++' | paste -sd, -
+}
+
 action="${1:-deploy}"
 project="${KANBAN_PROJECT:-$HOME/hello-kanban}"
 host="${KANBAN_HOST:-0.0.0.0}"
 port="${KANBAN_PORT:-3484}"
-allowed="${KANBAN_ALLOWED_HOSTS:-tyamini-dev,10.10.73.144}"
+allowed="${KANBAN_ALLOWED_HOSTS:-$(detect_allowed_hosts)}"
 log="${KANBAN_LOG:-/tmp/kanban-server.log}"
 # `-` (not `:-`): default only when unset, so KANBAN_PASSCODE_FLAG="" enables the passcode.
 passcode_flag="${KANBAN_PASSCODE_FLAG---no-passcode}"
@@ -79,7 +93,7 @@ do_start() {
 		>"$log" 2>&1 </dev/null &
 	disown
 	sleep 6
-	echo "--- kanban ($host:$port) | log: $log ---"
+	echo "--- kanban ($host:$port) | allowed hosts: $allowed | log: $log ---"
 	tail -n 12 "$log"
 }
 
