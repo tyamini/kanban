@@ -175,6 +175,9 @@ export async function shutdownRuntimeServer(deps: RuntimeShutdownCoordinatorDepe
 	const managedWorkspacePaths = new Set<string>();
 
 	for (const { workspacePath, terminalManager } of deps.workspaceRegistry.listManagedWorkspaces()) {
+		// Persist terminal transcripts before stopping sessions so PTY/Done
+		// transcripts can be restored after the runtime restarts.
+		await terminalManager.persistAllTerminalSnapshots();
 		const interrupted = terminalManager.markInterruptedAndStopAll();
 		const interruptedTaskIds = new Set(collectShutdownInterruptedTaskIds(interrupted, terminalManager));
 		if (!workspacePath) {

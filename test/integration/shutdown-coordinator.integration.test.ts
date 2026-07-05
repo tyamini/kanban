@@ -134,6 +134,7 @@ describe.sequential("shutdown coordinator integration", () => {
 
 				let didCloseRuntimeServer = false;
 				const managedTerminalManager = {
+					persistAllTerminalSnapshots: async () => {},
 					markInterruptedAndStopAll: () => [createSession("managed-running", "running")],
 					listSummaries: () => [createSession("managed-running", "running")],
 					getSummary: (taskId: string) => {

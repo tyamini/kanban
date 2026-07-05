@@ -33,6 +33,11 @@ import {
 	type TerminalProtocolFilterState,
 } from "./terminal-protocol-filter";
 import type { TerminalSessionListener, TerminalSessionService } from "./terminal-session-service";
+import {
+	deletePersistedTerminalSnapshot,
+	persistTerminalSnapshot,
+	readPersistedTerminalSnapshot,
+} from "./terminal-snapshot-store";
 import { TerminalStateMirror } from "./terminal-state-mirror";
 
 const MAX_WORKSPACE_TRUST_BUFFER_CHARS = 16_384;
@@ -287,10 +292,53 @@ export class TerminalSessionManager implements TerminalSessionService {
 
 	async getRestoreSnapshot(taskId: string) {
 		const entry = this.entries.get(taskId);
-		if (!entry?.terminalStateMirror) {
-			return null;
+		if (entry?.terminalStateMirror) {
+			return await entry.terminalStateMirror.getSnapshot();
 		}
-		return await entry.terminalStateMirror.getSnapshot();
+		// No live mirror (e.g. the session ended or the runtime restarted). Fall
+		// back to the last persisted snapshot so Done/PTY transcripts survive.
+		return await readPersistedTerminalSnapshot(taskId);
+	}
+
+	/**
+	 * Persist the current terminal scrollback for a task to disk (best-effort,
+	 * fire-and-forget). Called at lifecycle points where the transcript is
+	 * meaningful (turn end, exit, stop) so it can be restored after the live
+	 * mirror is gone.
+	 */
+	private persistTerminalSnapshotForEntry(entry: SessionEntry): void {
+		const mirror = entry.terminalStateMirror;
+		if (!mirror) {
+			return;
+		}
+		const taskId = entry.summary.taskId;
+		void mirror
+			.getSnapshot()
+			.then((snapshot) => persistTerminalSnapshot(taskId, snapshot))
+			.catch(() => undefined);
+	}
+
+	/**
+	 * Persist snapshots for all sessions that still have a live mirror. Used on
+	 * graceful shutdown to capture the freshest transcript before sessions stop.
+	 */
+	async persistAllTerminalSnapshots(): Promise<void> {
+		await Promise.all(
+			Array.from(this.entries.values())
+				.filter((entry) => entry.terminalStateMirror !== null)
+				.map(async (entry) => {
+					const mirror = entry.terminalStateMirror;
+					if (!mirror) {
+						return;
+					}
+					try {
+						const snapshot = await mirror.getSnapshot();
+						await persistTerminalSnapshot(entry.summary.taskId, snapshot);
+					} catch {
+						// Best-effort; shutdown must not fail on snapshot persistence.
+					}
+				}),
+		);
 	}
 
 	async startTaskSession(request: StartTaskSessionRequest): Promise<RuntimeTaskSessionSummary> {
@@ -310,6 +358,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 		}
 		entry.terminalStateMirror?.dispose();
 		entry.terminalStateMirror = null;
+		// A fresh run starts a new transcript; drop any persisted snapshot from a
+		// previous run so a restart during this run cannot restore stale output.
+		void deletePersistedTerminalSnapshot(request.taskId);
 
 		const cols = Number.isFinite(request.cols) && (request.cols ?? 0) > 0 ? Math.floor(request.cols ?? 0) : 120;
 		const rows = Number.isFinite(request.rows) && (request.rows ?? 0) > 0 ? Math.floor(request.rows ?? 0) : 40;
@@ -465,6 +516,12 @@ export class TerminalSessionManager implements TerminalSessionService {
 					for (const taskListener of currentEntry.listeners.values()) {
 						taskListener.onState?.(cloneSummary(summary));
 						taskListener.onExit?.(event.exitCode);
+					}
+					// Capture the final transcript before the mirror can be disposed so
+					// the exited session's output survives a runtime restart. Skip when
+					// auto-restarting since the fresh run drops any persisted snapshot.
+					if (!shouldAutoRestart) {
+						this.persistTerminalSnapshotForEntry(currentEntry);
 					}
 					currentEntry.active = null;
 					this.emitSummary(summary);
@@ -922,6 +979,8 @@ export class TerminalSessionManager implements TerminalSessionService {
 			return entry ? cloneSummary(entry.summary) : null;
 		}
 		entry.suppressAutoRestartOnExit = true;
+		// Capture the transcript before stopping so it can be restored later.
+		this.persistTerminalSnapshotForEntry(entry);
 		const cleanupFn = entry.active.onSessionCleanup;
 		entry.active.onSessionCleanup = null;
 		stopWorkspaceTrustTimers(entry.active);
@@ -958,6 +1017,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 		}
 		if (entry.active && transition.changed && transition.patch.state === "awaiting_review") {
 			entry.active.awaitingCodexPromptAfterEnter = false;
+			// A turn just ended (agent is awaiting review). Persist the transcript so
+			// it survives being moved to Done and a later runtime restart.
+			this.persistTerminalSnapshotForEntry(entry);
 		}
 		return updateSummary(entry, transition.patch);
 	}

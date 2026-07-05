@@ -9,6 +9,7 @@ import type {
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { ensureProjectSkillLinks } from "../server/kanban-skills";
 import { getRuntimeHomePath, getTaskWorktreesHomePath, loadWorkspaceContext } from "../state/workspace-state";
+import { deletePersistedTerminalSnapshot } from "../terminal/terminal-snapshot-store";
 import { getGitCommandErrorMessage, getGitStdout, readGitHeadInfo, runGit } from "./git-utils";
 import { getWorkspaceFolderLabelForWorktreePath, normalizeTaskIdForWorktreePath } from "./task-worktree-path";
 import { listTurbopackNodeModulesSymlinkSkipPaths } from "./task-worktree-turbopack";
@@ -579,6 +580,9 @@ export async function deleteTaskWorktree(options: {
 		const taskId = normalizeTaskIdForWorktreePath(options.taskId);
 		const rootPath = getWorktreesBaseRootPath();
 		const worktreePath = getTaskWorktreePath(options.repoPath, taskId);
+		// The task is being discarded (clear-trash / shutdown cleanup); drop its
+		// persisted terminal transcript so it does not linger on disk.
+		await deletePersistedTerminalSnapshot(options.taskId);
 		if (!(await pathExists(worktreePath))) {
 			await deleteTaskPatchFiles(taskId);
 			await pruneEmptyParents(rootPath, dirname(worktreePath));

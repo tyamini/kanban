@@ -34,12 +34,10 @@ describe("TerminalSessionManager", () => {
 			listenerIdCounter: 1,
 			listeners: new Map(),
 		};
-		const applySessionEvent = (
-			manager as unknown as {
-				applySessionEvent: (sessionEntry: unknown, event: { type: "hook.to_review" }) => RuntimeTaskSessionSummary;
-			}
-		).applySessionEvent;
-		const nextSummary = applySessionEvent(entry, { type: "hook.to_review" });
+		const managerInternals = manager as unknown as {
+			applySessionEvent: (sessionEntry: unknown, event: { type: "hook.to_review" }) => RuntimeTaskSessionSummary;
+		};
+		const nextSummary = managerInternals.applySessionEvent(entry, { type: "hook.to_review" });
 		expect(nextSummary.state).toBe("awaiting_review");
 		expect(entry.active.workspaceTrustBuffer).toBe("");
 	});
