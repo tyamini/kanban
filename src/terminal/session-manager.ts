@@ -151,6 +151,23 @@ function isActiveState(state: RuntimeTaskSessionState): boolean {
 	return state === "running" || state === "awaiting_review";
 }
 
+// When a task returns to running, the review-specific markers on the last hook
+// activity are stale. Clear only those (keep activityText/toolName, which reflect
+// live progress and are overwritten by subsequent tool hooks anyway).
+function clearHookActivityAttentionMarkers(activity: RuntimeTaskHookActivity | null): RuntimeTaskHookActivity | null {
+	if (!activity) {
+		return activity;
+	}
+	if (activity.notificationType === null && activity.finalMessage === null) {
+		return activity;
+	}
+	return {
+		...activity,
+		notificationType: null,
+		finalMessage: null,
+	};
+}
+
 function cloneStartTaskSessionRequest(request: StartTaskSessionRequest): StartTaskSessionRequest {
 	return {
 		...request,
@@ -1021,7 +1038,22 @@ export class TerminalSessionManager implements TerminalSessionService {
 			// it survives being moved to Done and a later runtime restart.
 			this.persistTerminalSnapshotForEntry(entry);
 		}
-		return updateSummary(entry, transition.patch);
+		const patch = transition.patch;
+		if (patch.state === "running") {
+			// The agent resumed working (to_in_progress / prompt-ready). The
+			// "attention" and "finished" markers on latestHookActivity
+			// (notificationType, finalMessage) describe the *previous* review and
+			// would otherwise linger — applyHookActivity merges fields, so a hook
+			// that omits them keeps the stale value. Left uncleared they make
+			// auto-review believe the task is still awaiting the user long after
+			// they responded, blocking auto-commit and auto-done. Clear them here
+			// so the next review is evaluated on fresh signals.
+			return updateSummary(entry, {
+				...patch,
+				latestHookActivity: clearHookActivityAttentionMarkers(entry.summary.latestHookActivity),
+			});
+		}
+		return updateSummary(entry, patch);
 	}
 
 	private ensureEntry(taskId: string): SessionEntry {

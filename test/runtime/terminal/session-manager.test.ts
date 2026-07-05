@@ -67,6 +67,35 @@ describe("TerminalSessionManager", () => {
 		expect(typeof updated?.lastHookAt).toBe("number");
 	});
 
+	it("clears stale attention/final markers when a task returns to in-progress", () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({
+			"task-1": createSummary({
+				state: "awaiting_review",
+				reviewReason: "hook",
+				latestHookActivity: {
+					activityText: "Final: color.txt created",
+					toolName: "AskUserQuestion",
+					toolInputSummary: null,
+					finalMessage: "what color should it be?",
+					hookEventName: "Notification",
+					notificationType: "permission_prompt",
+					source: "claude",
+				},
+			}),
+		});
+
+		const summary = manager.transitionToRunning("task-1");
+
+		expect(summary?.state).toBe("running");
+		// Stale review markers are cleared so the next review is evaluated fresh.
+		expect(summary?.latestHookActivity?.notificationType).toBeNull();
+		expect(summary?.latestHookActivity?.finalMessage).toBeNull();
+		// Progress fields are preserved.
+		expect(summary?.latestHookActivity?.toolName).toBe("AskUserQuestion");
+		expect(summary?.latestHookActivity?.source).toBe("claude");
+	});
+
 	it("resets stale running sessions without active processes", () => {
 		const manager = new TerminalSessionManager();
 		manager.hydrateFromRecord({
