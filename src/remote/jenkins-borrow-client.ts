@@ -6,12 +6,14 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export type BorrowPoolId = "office" | "aws";
+
 const DEFAULT_BASE_URL = "https://jenkins.dev.drivenets.net";
 const DEFAULT_JOB = "BorrowMachine";
-const CREDS_FILE = join(homedir(), ".config", "borrow-machine-jenkins.env");
+export const CREDS_FILE = join(homedir(), ".config", "borrow-machine-jenkins.env");
 // The username is effectively fixed for this deployment; the token is read from
 // the environment or the creds file so it is never committed to the repo.
-const DEFAULT_JENKINS_USER = "tyamini";
+export const DEFAULT_JENKINS_USER = "tyamini";
 
 export const BORROW_MACHINE_TYPES = [
 	"tiny",
@@ -37,13 +39,30 @@ export const BORROW_MACHINE_TYPES = [
 
 export type BorrowMachineType = (typeof BORROW_MACHINE_TYPES)[number];
 
+// AWS BorrowMachineAI INSTANCE_TYPE choices (EC2 sizes; distinct from office).
+export const AWS_INSTANCE_TYPES = [
+	"tiny",
+	"tiny-dn-kernel",
+	"small",
+	"small-dn-kernel",
+	"medium",
+	"medium-dn-kernel",
+	"large",
+	"large-dn-kernel",
+] as const;
+
+export type AwsInstanceType = (typeof AWS_INSTANCE_TYPES)[number];
+
 export interface JenkinsCreds {
 	user: string;
 	token: string;
 }
 
 export interface BorrowedMachine {
+	pool: BorrowPoolId;
 	machine: string;
+	/** SSH target (office: hostname; AWS: private IP). May differ from `machine`. */
+	host: string | null;
 	borrower: string | null;
 	leaseEndEpoch: number | null;
 }
@@ -56,12 +75,26 @@ export interface ParsedBorrowConsole {
 	sshHint: string | null;
 }
 
+export interface ParsedAwsBorrowConsole {
+	instanceId: string | null;
+	ip: string | null;
+}
+
+export interface JenkinsBuildInfo {
+	number: number;
+	result: string | null;
+	timestamp: number;
+	parameters: Record<string, string>;
+	causeUserIds: string[];
+}
+
 export type ProgressReporter = (message: string) => void;
 
-async function loadCredsFromFile(): Promise<Partial<JenkinsCreds>> {
+/** Parse the borrow creds file into a raw key→value map (best-effort). */
+export async function readJenkinsCredsFile(): Promise<Record<string, string>> {
 	try {
 		const raw = await readFile(CREDS_FILE, "utf8");
-		const creds: Partial<JenkinsCreds> = {};
+		const map: Record<string, string> = {};
 		for (const line of raw.split("\n")) {
 			const trimmed = line.trim();
 			if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
@@ -72,29 +105,14 @@ async function loadCredsFromFile(): Promise<Partial<JenkinsCreds>> {
 				.join("=")
 				.trim()
 				.replace(/^["']|["']$/g, "");
-			if (key?.trim() === "JENKINS_USER") {
-				creds.user = value;
-			} else if (key?.trim() === "JENKINS_API_TOKEN") {
-				creds.token = value;
+			if (key?.trim()) {
+				map[key.trim()] = value;
 			}
 		}
-		return creds;
+		return map;
 	} catch {
 		return {};
 	}
-}
-
-export async function loadJenkinsCreds(): Promise<JenkinsCreds> {
-	const fileCreds = await loadCredsFromFile();
-	const user = process.env.JENKINS_USER?.trim() || fileCreds.user || DEFAULT_JENKINS_USER;
-	const token = process.env.JENKINS_API_TOKEN?.trim() || fileCreds.token;
-	if (!token) {
-		throw new Error(
-			`Missing Jenkins API token. Set JENKINS_API_TOKEN in the environment or in ${CREDS_FILE} ` +
-				`(create one at ${DEFAULT_BASE_URL}/me/configure).`,
-		);
-	}
-	return { user, token };
 }
 
 function delay(ms: number): Promise<void> {
@@ -249,10 +267,57 @@ export class JenkinsBorrowClient {
 				}
 			}
 			if (borrower || leaseEndEpoch) {
-				rows.push({ machine: name, borrower, leaseEndEpoch });
+				rows.push({ pool: "office", machine: name, host: name, borrower, leaseEndEpoch });
 			}
 		}
 		return rows;
+	}
+
+	async getBuildConsole(buildNumber: number): Promise<string> {
+		return await this.getText(`/job/${encodeURIComponent(this.job)}/${buildNumber}/consoleText`);
+	}
+
+	buildUrlForNumber(buildNumber: number): string {
+		return `${this.base}/job/${encodeURIComponent(this.job)}/${buildNumber}/`;
+	}
+
+	/** Recent builds with their parameters and triggering user ids (newest first). */
+	async listRecentBuilds(count: number): Promise<JenkinsBuildInfo[]> {
+		const tree = `builds[number,result,timestamp,actions[parameters[name,value],causes[userId]]]{0,${count}}`;
+		const data = await this.getJson<{
+			builds?: Array<{
+				number: number;
+				result: string | null;
+				timestamp: number;
+				actions?: Array<{
+					parameters?: Array<{ name?: string; value?: unknown }>;
+					causes?: Array<{ userId?: string }>;
+				}>;
+			}>;
+		}>(`/job/${encodeURIComponent(this.job)}/api/json?tree=${encodeURIComponent(tree)}`);
+		return (data.builds ?? []).map((build) => {
+			const parameters: Record<string, string> = {};
+			const causeUserIds: string[] = [];
+			for (const action of build.actions ?? []) {
+				for (const param of action.parameters ?? []) {
+					if (param.name != null && param.value != null) {
+						parameters[param.name] = String(param.value);
+					}
+				}
+				for (const cause of action.causes ?? []) {
+					if (cause.userId) {
+						causeUserIds.push(cause.userId);
+					}
+				}
+			}
+			return {
+				number: build.number,
+				result: build.result,
+				timestamp: build.timestamp,
+				parameters,
+				causeUserIds,
+			};
+		});
 	}
 }
 
@@ -285,6 +350,16 @@ export function parseBorrowConsole(text: string): ParsedBorrowConsole {
 				: null,
 		sshHint: sshHintMatch?.[1] ?? null,
 	};
+}
+
+// AWS BorrowMachineAI console prints `Instance ready — id: i-..., ip: 172.30.x.x`.
+export function parseAwsBorrowConsole(text: string): ParsedAwsBorrowConsole {
+	const ready = text.match(/Instance ready\s*[—-]\s*id:\s*(i-[0-9a-f]+),\s*ip:\s*([0-9.]+)/i);
+	if (ready) {
+		return { instanceId: ready[1] ?? null, ip: ready[2] ?? null };
+	}
+	const launched = text.match(/Instance launched:\s*(i-[0-9a-f]+)/i);
+	return { instanceId: launched?.[1] ?? null, ip: null };
 }
 
 export interface BorrowParams {

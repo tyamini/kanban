@@ -14,10 +14,17 @@ import { createSshConnection, type SshConnection } from "./ssh-connection-manage
 const execFileAsync = promisify(execFile);
 
 // SSH details for a freshly-borrowed machine (see borrow-machine SKILL).
-const BORROW_SSH_PORT = Number.parseInt(process.env.KANBAN_BORROW_SSH_PORT ?? "2222", 10) || 2222;
-const BORROW_SSH_USER = process.env.KANBAN_BORROW_SSH_USER ?? "dn";
-const BORROW_SSH_PASSWORD = process.env.KANBAN_BORROW_SSH_PASSWORD ?? "drivenets";
 const DEFAULT_KEY_PATH = join(homedir(), ".ssh", "id_ed25519");
+
+/** Per-pool SSH settings for reaching a freshly-borrowed machine. */
+export interface BorrowSshConfig {
+	username: string;
+	password: string;
+	/** Port to try password auth on (office: 2222; AWS: 22). */
+	passwordPort: number;
+	/** Try the hub's SSH agent/key on port 22 first before falling back to the password. */
+	tryHubKey: boolean;
+}
 
 // Local artifacts to replicate on the borrowed machine (all under $HOME).
 const AI_PRIVATE_REL = ".drivenets/cheetah/AI/v2/private";
@@ -43,35 +50,41 @@ interface SshCandidate {
 	privateKeyPath?: string;
 }
 
-function buildSshCandidates(): SshCandidate[] {
-	// Borrowed machines are reachable from the hub without a password via the
-	// hub's SSH key/agent on port 22, so prefer that. Fall back to the shared
-	// password on 2222 for full-env borrows that expose SSH there.
+function buildSshCandidates(ssh: BorrowSshConfig): SshCandidate[] {
+	// Office borrows are reachable from the hub without a password via the hub's
+	// SSH key/agent on port 22, so prefer that when enabled. AWS instances need
+	// the shared password (on port 22). Always end with the password fallback.
 	const candidates: SshCandidate[] = [];
-	if (process.env.SSH_AUTH_SOCK) {
-		candidates.push({ label: "port 22 (agent)", port: 22, authMethod: "agent" });
-	}
-	if (existsSync(DEFAULT_KEY_PATH)) {
-		candidates.push({ label: "port 22 (key)", port: 22, authMethod: "key", privateKeyPath: DEFAULT_KEY_PATH });
+	if (ssh.tryHubKey) {
+		if (process.env.SSH_AUTH_SOCK) {
+			candidates.push({ label: "port 22 (agent)", port: 22, authMethod: "agent" });
+		}
+		if (existsSync(DEFAULT_KEY_PATH)) {
+			candidates.push({ label: "port 22 (key)", port: 22, authMethod: "key", privateKeyPath: DEFAULT_KEY_PATH });
+		}
 	}
 	candidates.push({
-		label: `port ${BORROW_SSH_PORT} (password)`,
-		port: BORROW_SSH_PORT,
+		label: `port ${ssh.passwordPort} (password)`,
+		port: ssh.passwordPort,
 		authMethod: "password",
-		password: BORROW_SSH_PASSWORD,
+		password: ssh.password,
 	});
 	return candidates;
 }
 
-async function connectWithRetries(machine: string, report: SetupProgressReporter): Promise<SshConnection> {
-	const candidates = buildSshCandidates();
+async function connectWithRetries(
+	machine: string,
+	ssh: BorrowSshConfig,
+	report: SetupProgressReporter,
+): Promise<SshConnection> {
+	const candidates = buildSshCandidates(ssh);
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= CONNECT_RETRIES; attempt += 1) {
 		for (const candidate of candidates) {
 			const connection = createSshConnection({
 				host: machine,
 				port: candidate.port,
-				username: BORROW_SSH_USER,
+				username: ssh.username,
 				authMethod: candidate.authMethod,
 				password: candidate.password,
 				privateKeyPath: candidate.privateKeyPath,
@@ -89,15 +102,15 @@ async function connectWithRetries(machine: string, report: SetupProgressReporter
 		await delay(CONNECT_RETRY_DELAY_MS);
 	}
 	throw new Error(
-		`Could not SSH into ${machine} as ${BORROW_SSH_USER} (tried ${candidates
+		`Could not SSH into ${machine} as ${ssh.username} (tried ${candidates
 			.map((c) => c.label)
 			.join(", ")}): ${lastError instanceof Error ? lastError.message : String(lastError)}`,
 	);
 }
 
-async function resolveRemoteHome(connection: SshConnection): Promise<string> {
+async function resolveRemoteHome(connection: SshConnection, username: string): Promise<string> {
 	const result = await connection.exec("bash -lc 'echo $HOME'");
-	return result.stdout.trim() || `/home/${BORROW_SSH_USER}`;
+	return result.stdout.trim() || `/home/${username}`;
 }
 
 /** Run one best-effort setup step, reporting success/failure without aborting the rest. */
@@ -239,11 +252,15 @@ async function runAiPull(connection: SshConnection, report: SetupProgressReporte
  * Provision a freshly-borrowed machine. Steps are best-effort and reported to
  * the borrow job log; only a total SSH-connect failure aborts provisioning.
  */
-export async function provisionBorrowedMachine(machine: string, report: SetupProgressReporter): Promise<void> {
+export async function provisionBorrowedMachine(
+	machine: string,
+	report: SetupProgressReporter,
+	ssh: BorrowSshConfig,
+): Promise<void> {
 	report(`Connecting to ${machine} to run setup...`);
-	const connection = await connectWithRetries(machine, report);
+	const connection = await connectWithRetries(machine, ssh, report);
 	try {
-		const remoteHome = await resolveRemoteHome(connection);
+		const remoteHome = await resolveRemoteHome(connection, ssh.username);
 		await installClaude(connection, report);
 		await replicatePrivateRepo(connection, remoteHome, report);
 		await copyBashrc(connection, remoteHome, report);

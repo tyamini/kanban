@@ -111,6 +111,18 @@ export function useRawLocalStorageValue<T extends string>(
 	return [value, setValue];
 }
 
+export function useJsonLocalStorageValue<T>(key: string, initialValue: T): [T, StateSetter<T>] {
+	const [storedValue, setStoredValue] = useReactUseLocalStorage<T>(key, initialValue);
+	const value = storedValue ?? initialValue;
+	const setValue: StateSetter<T> = useCallback(
+		(nextValue) => {
+			setStoredValue((currentValue) => resolveNextValue(nextValue, currentValue ?? initialValue));
+		},
+		[initialValue, setStoredValue],
+	);
+	return [value, setValue];
+}
+
 export function useDocumentTitle(title: string): void {
 	useReactUseTitle(title);
 }

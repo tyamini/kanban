@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
-import type { RuntimeBorrowStateResponse } from "@/runtime/types";
+import type { RuntimeBorrowPoolId, RuntimeBorrowStateResponse } from "@/runtime/types";
 
 const EMPTY_STATE: RuntimeBorrowStateResponse = {
-	types: [],
+	pools: [],
 	borrowed: [],
 	jobs: [],
-	credentialsError: null,
 };
 
 /**
- * Borrow-machine (Jenkins pool) hook. Polls borrow state so long-running
+ * Borrow-machine (Jenkins pools) hook. Polls borrow state so long-running
  * borrow/return/extend jobs surface their progress live. Uses the unscoped
  * (local) tRPC client so calls stay on the hub.
  */
 export function useBorrowMachines(): {
 	state: RuntimeBorrowStateResponse;
 	refresh: () => Promise<void>;
-	borrow: (input: { type: string; leaseHours: number }) => Promise<void>;
-	extend: (input: { machine: string; leaseHours: number }) => Promise<void>;
-	returnMachine: (machine: string) => Promise<void>;
+	borrow: (input: { pool: RuntimeBorrowPoolId; type: string; leaseHours: number }) => Promise<void>;
+	extend: (input: { pool: RuntimeBorrowPoolId; machine: string; leaseHours: number }) => Promise<void>;
+	returnMachine: (input: { pool: RuntimeBorrowPoolId; machine: string }) => Promise<void>;
 	dismissJob: (jobId: string) => Promise<void>;
 } {
 	const [state, setState] = useState<RuntimeBorrowStateResponse>(EMPTY_STATE);
@@ -63,8 +62,8 @@ export function useBorrowMachines(): {
 			[client, refresh],
 		),
 		returnMachine: useCallback(
-			async (machine) => {
-				await client.borrow.return.mutate({ machine });
+			async (input) => {
+				await client.borrow.return.mutate(input);
 				await refresh();
 			},
 			[client, refresh],

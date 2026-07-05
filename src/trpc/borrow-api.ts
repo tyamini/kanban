@@ -1,4 +1,4 @@
-// tRPC-facing handlers for borrowing CI machines from the Jenkins pool. Thin
+// tRPC-facing handlers for borrowing CI machines from the Jenkins pools. Thin
 // wrapper over the BorrowMachineManager; broadcasts a projects update so the
 // Machines panel refreshes when borrow state changes.
 import type {
@@ -6,12 +6,13 @@ import type {
 	RuntimeBorrowDismissJobResponse,
 	RuntimeBorrowExtendRequest,
 	RuntimeBorrowJobStartedResponse,
+	RuntimeBorrowPoolId,
 	RuntimeBorrowRequest,
 	RuntimeBorrowReturnRequest,
 	RuntimeBorrowStateResponse,
 } from "../core/api-contract";
 import type { BorrowMachineManager } from "../remote/borrow-machine-manager";
-import { BORROW_MACHINE_TYPES, type BorrowMachineType } from "../remote/jenkins-borrow-client";
+import { BORROW_POOLS } from "../remote/jenkins-borrow-pools";
 
 export interface BorrowApi {
 	getState: () => Promise<RuntimeBorrowStateResponse>;
@@ -21,19 +22,23 @@ export interface BorrowApi {
 	dismissJob: (input: RuntimeBorrowDismissJobRequest) => Promise<RuntimeBorrowDismissJobResponse>;
 }
 
-function assertBorrowType(type: string): BorrowMachineType {
-	if ((BORROW_MACHINE_TYPES as readonly string[]).includes(type)) {
-		return type as BorrowMachineType;
+function assertBorrowType(pool: RuntimeBorrowPoolId, type: string): void {
+	const poolConfig = BORROW_POOLS[pool];
+	if (!(poolConfig.types as readonly string[]).includes(type)) {
+		throw new Error(
+			`Unknown machine type "${type}" for ${poolConfig.label}. Valid types: ${poolConfig.types.join(", ")}`,
+		);
 	}
-	throw new Error(`Unknown machine type "${type}". Valid types: ${BORROW_MACHINE_TYPES.join(", ")}`);
 }
 
 export function createBorrowApi(deps: { borrowManager: BorrowMachineManager }): BorrowApi {
 	const { borrowManager } = deps;
 	return {
 		getState: async () => borrowManager.getState(),
-		borrow: async (input) =>
-			borrowManager.startBorrow({ type: assertBorrowType(input.type), leaseHours: input.leaseHours }),
+		borrow: async (input) => {
+			assertBorrowType(input.pool, input.type);
+			return borrowManager.startBorrow(input);
+		},
 		extend: async (input) => borrowManager.startExtend(input),
 		return: async (input) => borrowManager.startReturn(input),
 		dismissJob: async (input) => borrowManager.dismissJob(input.jobId),
@@ -45,7 +50,7 @@ export function createUnavailableBorrowApi(): BorrowApi {
 		throw new Error("Machine borrowing is not enabled on this server.");
 	};
 	return {
-		getState: async () => ({ types: [], borrowed: [], jobs: [], credentialsError: "Borrowing is not enabled." }),
+		getState: async () => ({ pools: [], borrowed: [], jobs: [] }),
 		borrow: unavailable,
 		extend: unavailable,
 		return: unavailable,

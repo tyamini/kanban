@@ -4,23 +4,26 @@ import {
 	Clock,
 	HardDriveDownload,
 	MonitorSmartphone,
+	Pencil,
 	Plus,
 	Server,
 	Trash2,
 	Undo2,
 	X,
 } from "lucide-react";
-import { type ReactElement, useCallback, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 
 import { showAppToast } from "@/components/app-toaster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { useBorrowMachines } from "@/hooks/use-borrow-machines";
+import { useMachineTags } from "@/hooks/use-machine-tags";
 import { useRemoteMachines } from "@/hooks/use-remote-machines";
 import type {
 	RuntimeBorrowedMachine,
 	RuntimeBorrowJob,
+	RuntimeBorrowPoolId,
 	RuntimeMachineConnectionStatus,
 	RuntimeMachineSummary,
 } from "@/runtime/types";
@@ -163,29 +166,33 @@ function BorrowSection({
 	onConnectToKanban: (initial: AddMachineInitial) => void;
 }): ReactElement {
 	const { state, borrow, extend, returnMachine, dismissJob } = useBorrowMachines();
+	const { getTag, setTag } = useMachineTags();
+	const [poolId, setPoolId] = useState<RuntimeBorrowPoolId | "">("");
 	const [type, setType] = useState<string>("");
 	const [lease, setLease] = useState("2");
 	const [isSubmitting, setIsSubmitting] = useState(false);
 
-	const effectiveType = type || state.types[0] || "";
+	const currentPool = state.pools.find((pool) => pool.id === poolId) ?? state.pools[0];
+	const poolTypes = currentPool?.types ?? [];
+	const effectiveType = poolTypes.includes(type) ? type : (poolTypes[0] ?? "");
 	const activeJobs = state.jobs.filter((job) => job.status === "running");
 	const recentJobs = state.jobs.filter((job) => job.status !== "running").slice(0, 3);
-	// Machines a still-running borrow reserved show up in `mine` before setup
+	// Machines a still-running borrow reserved show up in `borrowed` before setup
 	// finishes; mark them "in setup" and hold back the ready actions.
 	const settingUpMachines = new Set(
-		activeJobs.map((job) => job.reservedMachine).filter((name): name is string => Boolean(name)),
+		activeJobs.filter((job) => job.reservedMachine).map((job) => `${job.pool}:${job.reservedMachine}`),
 	);
 
 	const handleBorrow = useCallback(async () => {
-		if (!effectiveType) {
+		if (!currentPool || !effectiveType) {
 			return;
 		}
 		setIsSubmitting(true);
 		try {
-			await borrow({ type: effectiveType, leaseHours: Number.parseInt(lease, 10) || 2 });
+			await borrow({ pool: currentPool.id, type: effectiveType, leaseHours: Number.parseInt(lease, 10) || 2 });
 			showAppToast({
 				intent: "success",
-				message: `Borrowing a ${effectiveType} machine — this can take a few minutes.`,
+				message: `Borrowing a ${effectiveType} machine from ${currentPool.label} — this can take a few minutes.`,
 				timeout: 5000,
 			});
 		} catch (error) {
@@ -198,26 +205,44 @@ function BorrowSection({
 		} finally {
 			setIsSubmitting(false);
 		}
-	}, [borrow, effectiveType, lease]);
+	}, [borrow, currentPool, effectiveType, lease]);
 
 	return (
 		<div className="flex flex-col gap-2">
 			<span className={sectionLabelClass}>Borrowed machines</span>
 
-			{state.credentialsError ? (
-				<p className="px-1 text-[11px] text-status-red break-words">{state.credentialsError}</p>
+			{currentPool?.credentialsError ? (
+				<p className="px-1 text-[11px] text-status-red break-words">{currentPool.credentialsError}</p>
 			) : null}
 
 			<div className="flex items-end gap-2">
-				<div className="flex-1">
+				<div className="w-24">
+					<span className="block text-[11px] text-text-secondary mb-1">Pool</span>
+					<select
+						value={currentPool?.id ?? ""}
+						onChange={(event) => {
+							setPoolId(event.target.value as RuntimeBorrowPoolId);
+							setType("");
+						}}
+						disabled={isSubmitting || state.pools.length === 0}
+						className={inputClass}
+					>
+						{state.pools.map((pool) => (
+							<option key={pool.id} value={pool.id}>
+								{pool.label}
+							</option>
+						))}
+					</select>
+				</div>
+				<div className="flex-1 min-w-0">
 					<span className="block text-[11px] text-text-secondary mb-1">Type</span>
 					<select
 						value={effectiveType}
 						onChange={(event) => setType(event.target.value)}
-						disabled={isSubmitting || state.types.length === 0}
+						disabled={isSubmitting || poolTypes.length === 0}
 						className={inputClass}
 					>
-						{state.types.map((option) => (
+						{poolTypes.map((option) => (
 							<option key={option} value={option}>
 								{option}
 							</option>
@@ -253,25 +278,32 @@ function BorrowSection({
 			{state.borrowed.length === 0 ? (
 				<p className="px-1 text-[11px] text-text-tertiary">No machines borrowed.</p>
 			) : (
-				state.borrowed.map((machine) => (
-					<BorrowedMachineRow
-						key={machine.machine}
-						machine={machine}
-						isSettingUp={settingUpMachines.has(machine.machine)}
-						onExtend={(hours) => extend({ machine: machine.machine, leaseHours: hours })}
-						onReturn={() => returnMachine(machine.machine)}
-						onConnect={() =>
-							// Borrowed machines are key/agent reachable on port 22 without a
-							// password; leave password empty so auth falls back to the hub's key.
-							onConnectToKanban({
-								name: machine.machine,
-								host: machine.machine,
-								port: 22,
-								username: "dn",
-							})
-						}
-					/>
-				))
+				state.borrowed.map((machine) => {
+					const tag = getTag(machine.pool, machine.machine);
+					const connectHost = machine.host ?? machine.machine;
+					return (
+						<BorrowedMachineRow
+							key={`${machine.pool}:${machine.machine}`}
+							machine={machine}
+							tagName={tag}
+							onSetTag={(name) => setTag(machine.pool, machine.machine, name)}
+							isSettingUp={settingUpMachines.has(`${machine.pool}:${machine.machine}`)}
+							onExtend={(hours) => extend({ pool: machine.pool, machine: machine.machine, leaseHours: hours })}
+							onReturn={() => returnMachine({ pool: machine.pool, machine: machine.machine })}
+							onConnect={() =>
+								onConnectToKanban({
+									name: tag ?? machine.machine,
+									host: connectHost,
+									port: 22,
+									username: "dn",
+									// Office machines are key/agent reachable on port 22 (no password);
+									// AWS instances need the shared password.
+									password: machine.pool === "aws" ? "drivenets" : undefined,
+								})
+							}
+						/>
+					);
+				})
 			)}
 		</div>
 	);
@@ -332,19 +364,36 @@ function BorrowJobCard({ job, onDismiss }: { job: RuntimeBorrowJob; onDismiss: (
 
 function BorrowedMachineRow({
 	machine,
+	tagName,
+	onSetTag,
 	isSettingUp,
 	onExtend,
 	onReturn,
 	onConnect,
 }: {
 	machine: RuntimeBorrowedMachine;
+	tagName?: string;
+	onSetTag: (name: string) => void;
 	isSettingUp: boolean;
 	onExtend: (hours: number) => Promise<void>;
 	onReturn: () => Promise<void>;
 	onConnect: () => void;
 }): ReactElement {
 	const [isBusy, setIsBusy] = useState(false);
+	const [isEditingTag, setIsEditingTag] = useState(false);
+	const [tagDraft, setTagDraft] = useState(tagName ?? "");
+	const tagInputRef = useRef<HTMLInputElement>(null);
 	const remaining = formatRemaining(machine.leaseEndEpoch);
+	const displayName = tagName ?? machine.machine;
+	// Show the underlying identifier (and AWS private IP) as a secondary line.
+	const subtitleParts: string[] = [];
+	if (tagName) {
+		subtitleParts.push(machine.machine);
+	}
+	if (machine.host && machine.host !== machine.machine) {
+		subtitleParts.push(machine.host);
+	}
+	const subtitle = subtitleParts.join(" · ") || null;
 
 	const run = useCallback(async (action: () => Promise<void>) => {
 		setIsBusy(true);
@@ -362,12 +411,58 @@ function BorrowedMachineRow({
 		}
 	}, []);
 
+	const saveTag = useCallback(() => {
+		onSetTag(tagDraft);
+		setIsEditingTag(false);
+	}, [onSetTag, tagDraft]);
+
+	useEffect(() => {
+		if (isEditingTag) {
+			tagInputRef.current?.focus();
+		}
+	}, [isEditingTag]);
+
 	return (
 		<div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-2">
 			<div className="flex items-center justify-between gap-2">
 				<div className="flex items-center gap-2 min-w-0">
 					<Server size={15} className="text-text-secondary shrink-0" />
-					<span className="truncate font-mono text-[12px] text-text-primary">{machine.machine}</span>
+					<span className="shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-text-tertiary">
+						{machine.pool}
+					</span>
+					{isEditingTag ? (
+						<input
+							ref={tagInputRef}
+							value={tagDraft}
+							onChange={(event) => setTagDraft(event.target.value)}
+							onBlur={saveTag}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									saveTag();
+								} else if (event.key === "Escape") {
+									setTagDraft(tagName ?? "");
+									setIsEditingTag(false);
+								}
+							}}
+							placeholder="Name this machine"
+							className="h-6 min-w-0 flex-1 rounded-sm border border-border bg-surface-0 px-1.5 text-[12px] text-text-primary focus:outline-none focus:border-accent"
+						/>
+					) : (
+						<div className="flex items-center gap-1 min-w-0">
+							<span className="truncate text-[12px] text-text-primary">{displayName}</span>
+							<button
+								type="button"
+								onClick={() => {
+									setTagDraft(tagName ?? "");
+									setIsEditingTag(true);
+								}}
+								aria-label="Rename machine"
+								className="shrink-0 text-text-tertiary hover:text-text-primary"
+							>
+								<Pencil size={11} />
+							</button>
+						</div>
+					)}
 				</div>
 				{isSettingUp ? (
 					<span className="inline-flex items-center gap-1.5 text-[11px] text-status-orange shrink-0">
@@ -381,6 +476,9 @@ function BorrowedMachineRow({
 					</span>
 				) : null}
 			</div>
+			{subtitle ? (
+				<span className="truncate pl-6 font-mono text-[10.5px] text-text-tertiary">{subtitle}</span>
+			) : null}
 			{isSettingUp ? (
 				<p className="text-[11px] text-text-tertiary">
 					Still being borrowed — actions become available once setup finishes.
