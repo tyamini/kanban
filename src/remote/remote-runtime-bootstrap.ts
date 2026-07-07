@@ -18,7 +18,13 @@ import type { SshConnection } from "./ssh-connection-manager";
 
 const execFileAsync = promisify(execFile);
 
-const MIN_NODE_MAJOR = 22;
+// Minimum Node the remote runtime is built against. This is a full semver, not
+// just a major, because Kanban's build toolchain (rolldown / vite / vitest) has
+// an engine floor of `^20.19.0 || >=22.12.0`. A bare major check (>=22) wrongly
+// accepts versions like v22.11.0 that sit in the unsupported gap and fail the
+// remote `npm install`/build with EBADENGINE.
+const MIN_NODE_VERSION = { major: 22, minor: 12, patch: 0 } as const;
+const MIN_NODE_VERSION_LABEL = `${MIN_NODE_VERSION.major}.${MIN_NODE_VERSION.minor}.${MIN_NODE_VERSION.patch}`;
 const REMOTE_PORT_RANGE_START = 3500;
 const REMOTE_PORT_RANGE_SIZE = 1000;
 const DEFAULT_REMOTE_INSTALL_DIR = "~/.cline/kanban-remote";
@@ -28,7 +34,7 @@ const REMOTE_INSTALL_REPO_ENV = "KANBAN_REMOTE_INSTALL_REPO";
 // Node.js version installed into the user's home when the remote has no
 // suitable Node. Kept as a pinned LTS so downloads are reproducible; installing
 // into $HOME avoids needing sudo/root on the remote host.
-const MANAGED_NODE_VERSION = "v22.11.0";
+const MANAGED_NODE_VERSION = "v22.23.1";
 const MANAGED_NODE_DIR = "$HOME/.cline/kanban-node";
 // Records the content hash of the source last shipped + built on the remote, so
 // the hub re-ships and rebuilds whenever its own source changes.
@@ -68,13 +74,36 @@ export function getStableRemoteRuntimePort(machineId: string): number {
 	return REMOTE_PORT_RANGE_START + offset;
 }
 
-function parseNodeMajor(versionOutput: string): number | null {
-	const match = versionOutput.trim().match(/v?(\d+)\./);
+function parseNodeVersion(versionOutput: string): { major: number; minor: number; patch: number } | null {
+	const match = versionOutput.trim().match(/v?(\d+)\.(\d+)\.(\d+)/);
 	if (!match) {
 		return null;
 	}
 	const major = Number.parseInt(match[1] ?? "", 10);
-	return Number.isFinite(major) ? major : null;
+	const minor = Number.parseInt(match[2] ?? "", 10);
+	const patch = Number.parseInt(match[3] ?? "", 10);
+	if (![major, minor, patch].every(Number.isFinite)) {
+		return null;
+	}
+	return { major, minor, patch };
+}
+
+/** True when `node --version` output is >= MIN_NODE_VERSION (full semver compare). */
+function nodeSatisfiesMinimumVersion(versionOutput: string | null): boolean {
+	if (!versionOutput) {
+		return false;
+	}
+	const version = parseNodeVersion(versionOutput);
+	if (!version) {
+		return false;
+	}
+	if (version.major !== MIN_NODE_VERSION.major) {
+		return version.major > MIN_NODE_VERSION.major;
+	}
+	if (version.minor !== MIN_NODE_VERSION.minor) {
+		return version.minor > MIN_NODE_VERSION.minor;
+	}
+	return version.patch >= MIN_NODE_VERSION.patch;
 }
 
 async function firstNonEmptyLine(connection: SshConnection, command: string): Promise<string | null> {
@@ -88,8 +117,7 @@ export async function detectRemoteEnvironment(
 	options: { remoteInstallDir?: string | null } = {},
 ): Promise<RemoteEnvironmentReport> {
 	const nodeVersion = await firstNonEmptyLine(connection, "node --version 2>/dev/null || true");
-	const nodeMajor = nodeVersion ? parseNodeMajor(nodeVersion) : null;
-	const nodeSatisfiesMinimum = nodeMajor !== null && nodeMajor >= MIN_NODE_MAJOR;
+	const nodeSatisfiesMinimum = nodeSatisfiesMinimumVersion(nodeVersion);
 
 	const globalKanbanBinary = await firstNonEmptyLine(connection, "command -v kanban 2>/dev/null || true");
 
@@ -107,7 +135,7 @@ export async function detectRemoteEnvironment(
 }
 
 /**
- * Ensures the remote host has a usable Node.js >= MIN_NODE_MAJOR and returns a
+ * Ensures the remote host has a usable Node.js >= MIN_NODE_VERSION and returns a
  * shell `export PATH=...;` prefix that makes that Node the default `node`/`npm`
  * for subsequent commands. If the system Node is too old or missing, a pinned
  * Node is downloaded into `$HOME/.cline/kanban-node` (no sudo required).
@@ -117,15 +145,13 @@ async function ensureRemoteNode(
 	reportProgress: BootstrapProgressReporter,
 ): Promise<{ pathPrefix: string }> {
 	const systemVersion = await firstNonEmptyLine(connection, "bash -lc 'node --version 2>/dev/null || true'");
-	const systemMajor = systemVersion ? parseNodeMajor(systemVersion) : null;
-	if (systemMajor !== null && systemMajor >= MIN_NODE_MAJOR) {
+	if (nodeSatisfiesMinimumVersion(systemVersion)) {
 		return { pathPrefix: "" };
 	}
 
 	const managedPathPrefix = `export PATH="${MANAGED_NODE_DIR}/bin:$PATH"; `;
 	const managed = await connection.exec(`bash -lc '"${MANAGED_NODE_DIR}/bin/node" --version 2>/dev/null || true'`);
-	const managedMajor = parseNodeMajor(managed.stdout);
-	if (managedMajor !== null && managedMajor >= MIN_NODE_MAJOR) {
+	if (nodeSatisfiesMinimumVersion(managed.stdout)) {
 		return { pathPrefix: managedPathPrefix };
 	}
 
@@ -159,9 +185,10 @@ async function ensureRemoteNode(
 		}
 		throw new Error(`Failed to auto-install Node.js on the remote host: ${install.stderr || install.stdout}`);
 	}
-	const installedMajor = parseNodeMajor(install.stdout);
-	if (installedMajor === null || installedMajor < MIN_NODE_MAJOR) {
-		throw new Error("Node.js auto-install on the remote host did not report a supported version.");
+	if (!nodeSatisfiesMinimumVersion(install.stdout)) {
+		throw new Error(
+			`Node.js auto-install on the remote host did not report a supported version (needs >= ${MIN_NODE_VERSION_LABEL}).`,
+		);
 	}
 	return { pathPrefix: managedPathPrefix };
 }
