@@ -88,6 +88,12 @@ interface UseReviewAutoActionsOptions {
 		options?: RequestMoveTaskToTrashOptions,
 	) => Promise<void>;
 	resetKey?: string | null;
+	/**
+	 * When false, this hook is inert: the runtime server owns auto-review, so the
+	 * browser must not also fire commit/PR/done actions (that would double-execute
+	 * against the same agent). Defaults to true (legacy client-driven behavior).
+	 */
+	enabled?: boolean;
 }
 
 export function useReviewAutoActions({
@@ -97,6 +103,7 @@ export function useReviewAutoActions({
 	runAutoReviewGitAction,
 	requestMoveTaskToTrash,
 	resetKey,
+	enabled = true,
 }: UseReviewAutoActionsOptions): void {
 	const boardRef = useRef<BoardData>(board);
 	const sessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>(sessions);
@@ -355,12 +362,18 @@ export function useReviewAutoActions({
 	);
 
 	useEffect(() => {
+		if (!enabled) {
+			return;
+		}
 		evaluateAutoReview({
 			source: "board_or_loading_change",
 		});
-	}, [board, sessions, evaluateAutoReview, taskGitActionLoadingByTaskId]);
+	}, [board, sessions, evaluateAutoReview, taskGitActionLoadingByTaskId, enabled]);
 
 	useEffect(() => {
+		if (!enabled) {
+			return;
+		}
 		return subscribeToAnyTaskMetadata((taskId) => {
 			const selection = findCardSelection(boardRef.current, taskId);
 			if (!selection || selection.column.id !== "review") {
@@ -371,5 +384,5 @@ export function useReviewAutoActions({
 				taskId,
 			});
 		});
-	}, [evaluateAutoReview]);
+	}, [evaluateAutoReview, enabled]);
 }

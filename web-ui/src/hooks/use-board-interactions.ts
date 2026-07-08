@@ -70,6 +70,13 @@ interface UseBoardInteractionsInput {
 	readyForReviewNotificationsEnabled: boolean;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
+	/**
+	 * When true, the runtime server owns board orchestration (session->column
+	 * moves and auto-review). The browser then stops running those reactive loops
+	 * to avoid double-executing them against the server, and instead renders the
+	 * server-broadcast board state. Defaults to false (legacy client-driven).
+	 */
+	serverOrchestrationEnabled?: boolean;
 }
 
 export interface UseBoardInteractionsResult {
@@ -120,6 +127,7 @@ export function useBoardInteractions({
 	readyForReviewNotificationsEnabled,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
+	serverOrchestrationEnabled = false,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
 	const notificationPermissionPromptInFlightRef = useRef(false);
@@ -457,6 +465,13 @@ export function useBoardInteractions({
 	);
 
 	useEffect(() => {
+		// Server-driven orchestration owns session->column moves. Skip the client
+		// loop entirely; the server broadcasts the moved board and useWorkspaceSync
+		// re-hydrates it (revision bump), so the UI still reflects every transition.
+		if (serverOrchestrationEnabled) {
+			previousSessionsRef.current = { ...sessions };
+			return;
+		}
 		setBoard((currentBoard) => {
 			let nextBoard = currentBoard;
 			const previousSessions = previousSessionsRef.current;
@@ -531,7 +546,14 @@ export function useBoardInteractions({
 			previousSessionsRef.current = nextPreviousSessions;
 			return nextBoard;
 		});
-	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
+	}, [
+		programmaticCardMoveCycle,
+		sessions,
+		setBoard,
+		setSelectedTaskId,
+		tryProgrammaticCardMove,
+		serverOrchestrationEnabled,
+	]);
 
 	const {
 		confirmMoveTaskToTrash,
@@ -564,6 +586,7 @@ export function useBoardInteractions({
 		runAutoReviewGitAction,
 		requestMoveTaskToTrash: requestMoveTaskToTrashWithAnimation,
 		resetKey: currentProjectId,
+		enabled: !serverOrchestrationEnabled,
 	});
 
 	const resumeTaskFromTrash = useCallback(

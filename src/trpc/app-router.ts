@@ -97,6 +97,8 @@ import type {
 	RuntimeTaskSessionStartResponse,
 	RuntimeTaskSessionStopRequest,
 	RuntimeTaskSessionStopResponse,
+	RuntimeTaskStartRequest,
+	RuntimeTaskStartResponse,
 	RuntimeTaskWorkspaceInfoRequest,
 	RuntimeTaskWorkspaceInfoResponse,
 	RuntimeUpdateStatusResponse,
@@ -206,6 +208,8 @@ import {
 	runtimeTaskSessionStartResponseSchema,
 	runtimeTaskSessionStopRequestSchema,
 	runtimeTaskSessionStopResponseSchema,
+	runtimeTaskStartRequestSchema,
+	runtimeTaskStartResponseSchema,
 	runtimeTaskWorkspaceInfoRequestSchema,
 	runtimeTaskWorkspaceInfoResponseSchema,
 	runtimeUpdateStatusResponseSchema,
@@ -427,6 +431,12 @@ export interface RuntimeTrpcContext {
 		return: (input: RuntimeBorrowReturnRequest) => Promise<RuntimeBorrowJobStartedResponse>;
 		dismissJob: (input: RuntimeBorrowDismissJobRequest) => Promise<RuntimeBorrowDismissJobResponse>;
 	};
+	taskLifecycleApi: {
+		startTask: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeTaskStartRequest,
+		) => Promise<RuntimeTaskStartResponse>;
+	};
 }
 
 interface RuntimeTrpcContextWithWorkspaceScope extends RuntimeTrpcContext {
@@ -517,6 +527,12 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeTaskSessionStartResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.runtimeApi.startTaskSession(ctx.workspaceScope, input);
+			}),
+		startTask: workspaceProcedure
+			.input(runtimeTaskStartRequestSchema)
+			.output(runtimeTaskStartResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.taskLifecycleApi.startTask(ctx.workspaceScope, input);
 			}),
 		stopTaskSession: workspaceProcedure
 			.input(runtimeTaskSessionStopRequestSchema)

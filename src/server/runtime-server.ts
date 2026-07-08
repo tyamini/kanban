@@ -54,6 +54,8 @@ import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { ensureProjectSkillLinks } from "./kanban-skills";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import type { RuntimeStateHub } from "./runtime-state-hub";
+import { createTaskOrchestrator } from "./task-orchestrator";
+import { startTaskOnRuntime } from "./task-start";
 import type { WorkspaceRegistry } from "./workspace-registry";
 
 interface DisposeTrackedWorkspaceResult {
@@ -235,35 +237,75 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		deps.workspaceRegistry.clearActiveWorkspace();
 	};
 
+	// Single shared instances of the runtime/workspace APIs. Their methods take a
+	// scope argument explicitly and hold no per-request state, so one instance
+	// safely serves every tRPC request *and* the headless task orchestrator.
+	const runtimeApi = createRuntimeApi({
+		getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
+		getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
+		loadScopedRuntimeConfig: deps.workspaceRegistry.loadScopedRuntimeConfig,
+		setActiveRuntimeConfig: deps.workspaceRegistry.setActiveRuntimeConfig,
+		getScopedTerminalManager,
+		getScopedClineTaskSessionService,
+		resolveInteractiveShellCommand: deps.resolveInteractiveShellCommand,
+		runCommand: deps.runCommand,
+		broadcastClineMcpAuthStatusesUpdated: deps.runtimeStateHub.broadcastClineMcpAuthStatusesUpdated,
+		broadcastTaskChatCleared: deps.runtimeStateHub.broadcastTaskChatCleared,
+		bumpClineSessionContextVersion: deps.runtimeStateHub.bumpClineSessionContextVersion,
+		prepareForStateReset,
+		getUpdateStatus: deps.getUpdateStatus,
+		runUpdateNow: deps.runUpdateNow,
+	});
+	const workspaceApi = createWorkspaceApi({
+		ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
+		getScopedClineTaskSessionService,
+		broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
+		broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
+		buildWorkspaceStateSnapshot: deps.workspaceRegistry.buildWorkspaceStateSnapshot,
+	});
+
+	// The atomic start primitive shared by the tRPC `runtime.startTask` mutation
+	// and the orchestrator (dependency chaining + startup recovery).
+	const taskLifecycleApi: RuntimeTrpcContext["taskLifecycleApi"] = {
+		startTask: async (scope, input) =>
+			await startTaskOnRuntime(
+				{
+					loadState: workspaceApi.loadState,
+					ensureWorktree: workspaceApi.ensureWorktree,
+					startTaskSession: runtimeApi.startTaskSession,
+					broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
+				},
+				{ scope, taskId: input.taskId, promptOverride: input.promptOverride },
+			),
+	};
+
+	const taskOrchestrator = createTaskOrchestrator({
+		runtimeApi,
+		workspaceApi,
+		getScopedClineTaskSessionService,
+		broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
+		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
+		listManagedWorkspaces: () =>
+			deps.workspaceRegistry
+				.listManagedWorkspaces()
+				.map(({ workspaceId, workspacePath }) => ({ workspaceId, workspacePath })),
+		warn: deps.warn,
+	});
+	// Drive a reconcile whenever a session transitions or workspace metadata
+	// changes, so the pipeline advances headlessly with no browser attached.
+	deps.runtimeStateHub.setOrchestrationListener((workspaceId) => {
+		taskOrchestrator.notifyWorkspaceActivity(workspaceId);
+	});
+
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
 		const scope = await resolveWorkspaceScopeFromRequest(req, requestUrl);
 		return {
 			requestedWorkspaceId: scope.requestedWorkspaceId,
 			workspaceScope: scope.workspaceScope,
-			runtimeApi: createRuntimeApi({
-				getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
-				getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
-				loadScopedRuntimeConfig: deps.workspaceRegistry.loadScopedRuntimeConfig,
-				setActiveRuntimeConfig: deps.workspaceRegistry.setActiveRuntimeConfig,
-				getScopedTerminalManager,
-				getScopedClineTaskSessionService,
-				resolveInteractiveShellCommand: deps.resolveInteractiveShellCommand,
-				runCommand: deps.runCommand,
-				broadcastClineMcpAuthStatusesUpdated: deps.runtimeStateHub.broadcastClineMcpAuthStatusesUpdated,
-				broadcastTaskChatCleared: deps.runtimeStateHub.broadcastTaskChatCleared,
-				bumpClineSessionContextVersion: deps.runtimeStateHub.bumpClineSessionContextVersion,
-				prepareForStateReset,
-				getUpdateStatus: deps.getUpdateStatus,
-				runUpdateNow: deps.runUpdateNow,
-			}),
-			workspaceApi: createWorkspaceApi({
-				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
-				getScopedClineTaskSessionService,
-				broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
-				broadcastRuntimeProjectsUpdated: deps.runtimeStateHub.broadcastRuntimeProjectsUpdated,
-				buildWorkspaceStateSnapshot: deps.workspaceRegistry.buildWorkspaceStateSnapshot,
-			}),
+			runtimeApi,
+			workspaceApi,
+			taskLifecycleApi,
 			projectsApi: createProjectsApi({
 				getActiveWorkspacePath: deps.workspaceRegistry.getActiveWorkspacePath,
 				getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
@@ -586,6 +628,12 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	if (!address || typeof address === "string") {
 		throw new Error("Failed to start local server.");
 	}
+
+	// Recover orphaned in-progress tasks (restart-interrupted work and mid-start
+	// orphans) and reconcile every managed workspace as soon as the server is up.
+	void taskOrchestrator.reconcileAllOnStartup().catch((error) => {
+		deps.warn(`[orchestrator] startup reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+	});
 	const activeWorkspaceId = deps.workspaceRegistry.getActiveWorkspaceId();
 	const url = activeWorkspaceId
 		? buildKanbanRuntimeUrl(`/${encodeURIComponent(activeWorkspaceId)}`)
@@ -594,6 +642,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	return {
 		url,
 		close: async () => {
+			taskOrchestrator.dispose();
 			await Promise.all(
 				Array.from(clineTaskSessionServiceByWorkspaceId.values()).map(async (service) => {
 					await service.dispose();

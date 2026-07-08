@@ -17,7 +17,6 @@ import {
 	addTaskToColumn,
 	deleteTasksFromBoard,
 	getTaskColumnId,
-	moveTaskToColumn,
 	type RuntimeAddTaskDependencyResult,
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
@@ -674,74 +673,22 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
-	const runtimeState = await runtimeClient.workspace.getState.query();
-	const fromColumnId = getTaskColumnId(runtimeState.board, input.taskId);
-	if (!fromColumnId) {
-		throw new Error(`Task "${input.taskId}" was not found in workspace ${workspaceRepoPath}.`);
+
+	// Delegate to the atomic server-side start primitive: ensure worktree, start
+	// the agent session, and move the card to in_progress in a single call. This
+	// removes the historical multi-RPC "start dance" that could orphan a card if
+	// the caller disconnected mid-sequence.
+	const started = await runtimeClient.runtime.startTask.mutate({ taskId: input.taskId });
+	if (!started.ok) {
+		throw new Error(started.error ?? `Task "${input.taskId}" could not be started.`);
 	}
 
-	if (fromColumnId !== "backlog" && fromColumnId !== "in_progress") {
-		throw new Error(
-			`Task "${input.taskId}" is in "${fromColumnId}" and can only be started from backlog or in_progress.`,
-		);
-	}
-
-	const currentRecord = findTaskRecord(runtimeState, input.taskId);
-	const task = currentRecord?.task;
-	if (!task) {
-		throw new Error(`Task "${input.taskId}" could not be resolved.`);
-	}
-
-	const existingSession = runtimeState.sessions[task.id] ?? null;
-	const shouldStartSession = !existingSession || existingSession.state !== "running";
-
-	if (shouldStartSession) {
-		const ensured = await runtimeClient.workspace.ensureWorktree.mutate({
-			taskId: task.id,
-			baseRef: task.baseRef,
-		});
-		if (!ensured.ok) {
-			throw new Error(ensured.error ?? "Could not ensure task worktree.");
-		}
-
-		const started = await runtimeClient.runtime.startTaskSession.mutate({
-			taskId: task.id,
-			prompt: task.prompt,
-			taskTitle: task.title,
-			startInPlanMode: task.startInPlanMode,
-			baseRef: task.baseRef,
-			agentId: task.agentId,
-			clineSettings: task.clineSettings,
-		});
-		if (!started.ok || !started.summary) {
-			throw new Error(started.error ?? "Could not start task session.");
-		}
-	}
-
-	const moved = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (latestState) => {
-		const movement = moveTaskToColumn(latestState.board, input.taskId, "in_progress");
-		if (!movement.task) {
-			throw new Error(`Task "${input.taskId}" could not be resolved.`);
-		}
-		if (!movement.moved) {
-			return {
-				board: latestState.board,
-				value: movement,
-			};
-		}
-		return {
-			board: movement.board,
-			value: movement,
-		};
-	});
-
-	if (!moved.moved) {
+	if (!started.moved) {
 		return {
 			ok: true,
 			message: `Task "${input.taskId}" is already in progress.`,
 			task: {
-				id: task.id,
-				prompt: task.prompt,
+				id: input.taskId,
 				column: "in_progress",
 				workspacePath: workspaceRepoPath,
 			},
@@ -751,8 +698,7 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 	return {
 		ok: true,
 		task: {
-			id: task.id,
-			prompt: task.prompt,
+			id: input.taskId,
 			column: "in_progress",
 			workspacePath: workspaceRepoPath,
 		},

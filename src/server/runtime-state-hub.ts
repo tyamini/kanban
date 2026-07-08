@@ -66,6 +66,12 @@ export interface RuntimeStateHub {
 	broadcastClineMcpAuthStatusesUpdated: (statuses: RuntimeClineMcpServerAuthStatus[]) => void;
 	bumpClineSessionContextVersion: () => void;
 	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
+	/**
+	 * Register the headless task orchestrator. It is notified (by workspace id)
+	 * whenever a session transitions or workspace metadata changes so it can
+	 * reconcile the board without any browser client connected.
+	 */
+	setOrchestrationListener: (listener: ((workspaceId: string) => void) | null) => void;
 	close: () => Promise<void>;
 }
 
@@ -81,9 +87,21 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 	const runtimeStateWorkspaceIdByClient = new Map<WebSocket, string>();
 	const remoteStreamUnsubscribeByWorkspaceId = new Map<string, () => void>();
 	let clineSessionContextVersion = 0;
+	let orchestrationListener: ((workspaceId: string) => void) | null = null;
+	const notifyOrchestration = (workspaceId: string) => {
+		if (!orchestrationListener) {
+			return;
+		}
+		try {
+			orchestrationListener(workspaceId);
+		} catch {
+			// The orchestrator handles its own errors; never let it break streaming.
+		}
+	};
 	const runtimeStateWebSocketServer = new WebSocketServer({ noServer: true });
 	const workspaceMetadataMonitor = createWorkspaceMetadataMonitor({
 		onMetadataUpdated: (workspaceId, workspaceMetadata) => {
+			notifyOrchestration(workspaceId);
 			const clients = runtimeStateClientsByWorkspaceId.get(workspaceId);
 			if (!clients || clients.size === 0) {
 				return;
@@ -568,6 +586,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 			}
 			const unsubscribe = manager.onSummary((summary) => {
 				queueTaskSessionSummaryBroadcast(workspaceId, summary);
+				notifyOrchestration(workspaceId);
 			});
 			terminalSummaryUnsubscribeByWorkspaceId.set(workspaceId, unsubscribe);
 		},
@@ -585,6 +604,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 				const previousSummary = previousSummariesByTaskId.get(summary.taskId);
 				previousSummariesByTaskId.set(summary.taskId, summary);
 				queueTaskSessionSummaryBroadcast(workspaceId, summary);
+				notifyOrchestration(workspaceId);
 				const didCheckpointChange =
 					previousSummary?.latestTurnCheckpoint?.commit !== summary.latestTurnCheckpoint?.commit ||
 					previousSummary?.previousTurnCheckpoint?.commit !== summary.previousTurnCheckpoint?.commit;
@@ -621,6 +641,9 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		broadcastClineMcpAuthStatusesUpdated,
 		bumpClineSessionContextVersion,
 		broadcastTaskReadyForReview,
+		setOrchestrationListener: (listener) => {
+			orchestrationListener = listener;
+		},
 		close: async () => {
 			for (const timer of taskSessionBroadcastTimersByWorkspaceId.values()) {
 				clearTimeout(timer);

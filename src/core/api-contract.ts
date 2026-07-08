@@ -1236,6 +1236,24 @@ export const runtimeTaskSessionStartResponseSchema = z.object({
 });
 export type RuntimeTaskSessionStartResponse = z.infer<typeof runtimeTaskSessionStartResponseSchema>;
 
+// Atomic "start a task" request handled entirely server-side: ensure the
+// worktree, start the agent session, and move the card to in_progress in one
+// call. Replaces the browser's 3-step start dance so a disconnect cannot orphan
+// a card mid-start.
+export const runtimeTaskStartRequestSchema = z.object({
+	taskId: z.string(),
+	promptOverride: z.string().optional(),
+});
+export type RuntimeTaskStartRequest = z.infer<typeof runtimeTaskStartRequestSchema>;
+
+export const runtimeTaskStartResponseSchema = z.object({
+	ok: z.boolean(),
+	alreadyRunning: z.boolean(),
+	moved: z.boolean(),
+	error: z.string().optional(),
+});
+export type RuntimeTaskStartResponse = z.infer<typeof runtimeTaskStartResponseSchema>;
+
 export const runtimeTaskSessionStopRequestSchema = z.object({
 	taskId: z.string(),
 });
