@@ -434,6 +434,13 @@ async function buildSanitizedClaudeConfig(): Promise<string | null> {
 	if (sanitized.hasCompletedOnboarding === undefined && sanitized.oauthAccount === undefined) {
 		return null;
 	}
+	// Pre-accept the one-time Bypass Permissions disclaimer. Kanban launches the
+	// agent with --dangerously-skip-permissions, and on a fresh machine Claude
+	// otherwise blocks on a "Yes, I accept" prompt before the first session. This
+	// flag is exactly what accepting that dialog persists. (The complementary
+	// folder-trust prompt is suppressed via CLAUDE_CODE_SANDBOXED in the remote
+	// runtime env — see remote-runtime-bootstrap.ts.)
+	sanitized.bypassPermissionsModeAccepted = true;
 	return JSON.stringify(sanitized, null, 2);
 }
 

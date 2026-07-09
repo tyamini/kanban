@@ -241,7 +241,11 @@ function buildLaunchCommand(input: {
 	// loopback runtime through an SSH tunnel whose local port differs from the
 	// runtime's own port. setsid + detached stdin fully detaches the daemon from
 	// the SSH exec channel so it is not killed with SIGHUP when the channel closes.
-	const runtimeEnv = "KANBAN_RUNTIME_HOST=127.0.0.1 KANBAN_TRUST_TUNNEL=1";
+	// CLAUDE_CODE_SANDBOXED=1 is inherited by the Claude agents this runtime
+	// spawns; it marks the workspace trusted (the machine is a borrowed, disposable
+	// sandbox) so the per-folder "Is this a project you trust?" prompt never blocks
+	// an unsupervised session. It only affects Claude's trust gate, nothing else.
+	const runtimeEnv = "KANBAN_RUNTIME_HOST=127.0.0.1 KANBAN_TRUST_TUNNEL=1 CLAUDE_CODE_SANDBOXED=1";
 	// A dedicated PID file lets us restart precisely the previous instance without
 	// a `pkill -f` pattern that would also match (and kill) this launcher and the
 	// freshly-spawned daemon.
