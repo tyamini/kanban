@@ -219,6 +219,36 @@ export function createBorrowMachineManager(options: { warn?: (message: string) =
 				host: parsed.ip,
 				borrower: user,
 				leaseEndEpoch,
+				orphaned: false,
+			});
+		}
+
+		// Surface orphans: failed Borrow builds that launched an instance but never
+		// returned it. These keep running (and cost money) yet are invisible to the
+		// successful-build scan above, so expose them so the user can return them.
+		for (const build of builds) {
+			if (!build.result || build.result === "SUCCESS" || build.parameters.Action !== "Borrow") {
+				continue;
+			}
+			const mine = build.causeUserIds.includes(user) || build.parameters.on_behalf === user;
+			if (!mine) {
+				continue;
+			}
+			const parsed = await getAwsBuildInstance(client, build.number);
+			if (!parsed.instanceId || gone.has(parsed.instanceId) || result.has(parsed.instanceId)) {
+				continue;
+			}
+			const leaseHours = Number.parseInt(build.parameters.LEASE_TIME ?? "", 10);
+			const leaseEndEpoch = Number.isFinite(leaseHours)
+				? Math.floor(build.timestamp / 1000) + leaseHours * 3600
+				: null;
+			result.set(parsed.instanceId, {
+				pool: "aws",
+				machine: parsed.instanceId,
+				host: parsed.ip,
+				borrower: user,
+				leaseEndEpoch,
+				orphaned: true,
 			});
 		}
 
@@ -373,6 +403,7 @@ export function createBorrowMachineManager(options: { warn?: (message: string) =
 				host: parsed.ip,
 				borrower: creds.user,
 				leaseEndEpoch: Math.floor(Date.now() / 1000) + leaseHours * 3600,
+				orphaned: false,
 			});
 			job.reservedMachine = parsed.instanceId;
 			report(`Borrowed ${parsed.instanceId}${parsed.ip ? ` (${parsed.ip})` : ""}.`);

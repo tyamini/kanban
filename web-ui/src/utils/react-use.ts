@@ -116,9 +116,25 @@ export function useJsonLocalStorageValue<T>(key: string, initialValue: T): [T, S
 	const value = storedValue ?? initialValue;
 	const setValue: StateSetter<T> = useCallback(
 		(nextValue) => {
-			setStoredValue((currentValue) => resolveNextValue(nextValue, currentValue ?? initialValue));
+			// react-use's useLocalStorage passes a stale `state` into functional updaters,
+			// so consecutive functional updates clobber each other. Resolve against the
+			// latest value read straight from storage instead.
+			if (typeof nextValue !== "function") {
+				setStoredValue(nextValue);
+				return;
+			}
+			let current = initialValue;
+			const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+			if (raw != null) {
+				try {
+					current = JSON.parse(raw) as T;
+				} catch {
+					current = initialValue;
+				}
+			}
+			setStoredValue(resolveNextValue(nextValue, current));
 		},
-		[initialValue, setStoredValue],
+		[initialValue, key, setStoredValue],
 	);
 	return [value, setValue];
 }

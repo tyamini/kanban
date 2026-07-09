@@ -8,6 +8,7 @@ import {
 	Plus,
 	Server,
 	Trash2,
+	TriangleAlert,
 	Undo2,
 	X,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { Spinner } from "@/components/ui/spinner";
 import { useBorrowMachines } from "@/hooks/use-borrow-machines";
+import { useHiddenMachines } from "@/hooks/use-hidden-machines";
 import { useMachineTags } from "@/hooks/use-machine-tags";
 import { useRemoteMachines } from "@/hooks/use-remote-machines";
 import type {
@@ -167,6 +169,7 @@ function BorrowSection({
 }): ReactElement {
 	const { state, borrow, extend, returnMachine, dismissJob } = useBorrowMachines();
 	const { getTag, setTag } = useMachineTags();
+	const { isHidden, hide, unhide } = useHiddenMachines();
 	const [poolId, setPoolId] = useState<RuntimeBorrowPoolId | "">("");
 	const [type, setType] = useState<string>("");
 	const [lease, setLease] = useState("2");
@@ -275,36 +278,60 @@ function BorrowSection({
 				<BorrowJobCard key={job.id} job={job} onDismiss={() => void dismissJob(job.id)} />
 			))}
 
-			{state.borrowed.length === 0 ? (
-				<p className="px-1 text-[11px] text-text-tertiary">No machines borrowed.</p>
-			) : (
-				state.borrowed.map((machine) => {
-					const tag = getTag(machine.pool, machine.machine);
-					const connectHost = machine.host ?? machine.machine;
-					return (
-						<BorrowedMachineRow
-							key={`${machine.pool}:${machine.machine}`}
-							machine={machine}
-							tagName={tag}
-							onSetTag={(name) => setTag(machine.pool, machine.machine, name)}
-							isSettingUp={settingUpMachines.has(`${machine.pool}:${machine.machine}`)}
-							onExtend={(hours) => extend({ pool: machine.pool, machine: machine.machine, leaseHours: hours })}
-							onReturn={() => returnMachine({ pool: machine.pool, machine: machine.machine })}
-							onConnect={() =>
-								onConnectToKanban({
-									name: tag ?? machine.machine,
-									host: connectHost,
-									port: 22,
-									username: "dn",
-									// Office machines are key/agent reachable on port 22 (no password);
-									// AWS instances need the shared password.
-									password: machine.pool === "aws" ? "drivenets" : undefined,
-								})
-							}
-						/>
-					);
-				})
-			)}
+			{(() => {
+				const visible = state.borrowed.filter((machine) => !isHidden(machine.pool, machine.machine));
+				const hiddenPresent = state.borrowed.filter((machine) => isHidden(machine.pool, machine.machine));
+				return (
+					<>
+						{visible.length === 0 ? (
+							<p className="px-1 text-[11px] text-text-tertiary">No machines borrowed.</p>
+						) : (
+							visible.map((machine) => {
+								const tag = getTag(machine.pool, machine.machine);
+								const connectHost = machine.host ?? machine.machine;
+								return (
+									<BorrowedMachineRow
+										key={`${machine.pool}:${machine.machine}`}
+										machine={machine}
+										tagName={tag}
+										onSetTag={(name) => setTag(machine.pool, machine.machine, name)}
+										isSettingUp={settingUpMachines.has(`${machine.pool}:${machine.machine}`)}
+										onExtend={(hours) =>
+											extend({ pool: machine.pool, machine: machine.machine, leaseHours: hours })
+										}
+										onReturn={() => returnMachine({ pool: machine.pool, machine: machine.machine })}
+										onDismiss={() => hide(machine.pool, machine.machine)}
+										onConnect={() =>
+											onConnectToKanban({
+												name: tag ?? machine.machine,
+												host: connectHost,
+												port: 22,
+												username: "dn",
+												// Office machines are key/agent reachable on port 22 (no password);
+												// AWS instances need the shared password.
+												password: machine.pool === "aws" ? "drivenets" : undefined,
+											})
+										}
+									/>
+								);
+							})
+						)}
+						{hiddenPresent.length > 0 ? (
+							<button
+								type="button"
+								onClick={() => {
+									for (const machine of hiddenPresent) {
+										unhide(machine.pool, machine.machine);
+									}
+								}}
+								className="self-start px-1 text-[11px] text-text-tertiary hover:text-text-primary"
+							>
+								{hiddenPresent.length} hidden — restore
+							</button>
+						) : null}
+					</>
+				);
+			})()}
 		</div>
 	);
 }
@@ -369,6 +396,7 @@ function BorrowedMachineRow({
 	isSettingUp,
 	onExtend,
 	onReturn,
+	onDismiss,
 	onConnect,
 }: {
 	machine: RuntimeBorrowedMachine;
@@ -377,12 +405,14 @@ function BorrowedMachineRow({
 	isSettingUp: boolean;
 	onExtend: (hours: number) => Promise<void>;
 	onReturn: () => Promise<void>;
+	onDismiss: () => void;
 	onConnect: () => void;
 }): ReactElement {
 	const [isBusy, setIsBusy] = useState(false);
 	const [isEditingTag, setIsEditingTag] = useState(false);
 	const [tagDraft, setTagDraft] = useState(tagName ?? "");
 	const tagInputRef = useRef<HTMLInputElement>(null);
+	const isOrphaned = machine.orphaned;
 	const remaining = formatRemaining(machine.leaseEndEpoch);
 	const displayName = tagName ?? machine.machine;
 	// Show the underlying identifier (and AWS private IP) as a secondary line.
@@ -423,7 +453,12 @@ function BorrowedMachineRow({
 	}, [isEditingTag]);
 
 	return (
-		<div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-2">
+		<div
+			className={cn(
+				"flex flex-col gap-1.5 rounded-md border px-2.5 py-2",
+				isOrphaned ? "border-status-orange/40 bg-status-orange/5" : "border-border bg-surface-2",
+			)}
+		>
 			<div className="flex items-center justify-between gap-2">
 				<div className="flex items-center gap-2 min-w-0">
 					<Server size={15} className="text-text-secondary shrink-0" />
@@ -469,6 +504,11 @@ function BorrowedMachineRow({
 						<Spinner size={11} />
 						Setting up…
 					</span>
+				) : isOrphaned ? (
+					<span className="inline-flex items-center gap-1 text-[11px] text-status-orange shrink-0">
+						<TriangleAlert size={11} />
+						Orphaned
+					</span>
 				) : remaining ? (
 					<span className="inline-flex items-center gap-1 text-[11px] text-text-secondary shrink-0">
 						<Clock size={11} />
@@ -483,6 +523,35 @@ function BorrowedMachineRow({
 				<p className="text-[11px] text-text-tertiary">
 					Still being borrowed — actions become available once setup finishes.
 				</p>
+			) : isOrphaned ? (
+				<>
+					<p className="text-[11px] text-status-orange/90">
+						Left running by a failed borrow and never returned. Return it to clean up — or, if it no longer
+						exists, dismiss it to hide it from this list.
+					</p>
+					<div className="flex items-center gap-1.5">
+						<Button
+							variant="danger"
+							size="sm"
+							icon={<Undo2 size={13} />}
+							onClick={() => void run(onReturn)}
+							disabled={isBusy}
+							aria-label={`Return ${machine.machine}`}
+						>
+							Return
+						</Button>
+						<Button
+							variant="ghost"
+							size="sm"
+							icon={<X size={13} />}
+							onClick={onDismiss}
+							disabled={isBusy}
+							aria-label={`Dismiss ${machine.machine}`}
+						>
+							Dismiss
+						</Button>
+					</div>
+				</>
 			) : (
 				<div className="flex items-center gap-1.5">
 					<Button variant="primary" size="sm" icon={<Cable size={12} />} onClick={onConnect} disabled={isBusy}>

@@ -698,6 +698,8 @@ export const runtimeBorrowedMachineSchema = z.object({
 	host: z.string().nullable(),
 	borrower: z.string().nullable(),
 	leaseEndEpoch: z.number().nullable(),
+	/** Launched by a failed borrow and never returned; surfaced for cleanup only. */
+	orphaned: z.boolean().default(false),
 });
 export type RuntimeBorrowedMachine = z.infer<typeof runtimeBorrowedMachineSchema>;
 

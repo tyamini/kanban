@@ -65,6 +65,13 @@ export interface BorrowedMachine {
 	host: string | null;
 	borrower: string | null;
 	leaseEndEpoch: number | null;
+	/**
+	 * True when this row was reconstructed from a *failed* borrow build that
+	 * launched an instance but never returned it (AWS only). Such instances keep
+	 * running and are invisible to the normal successful-build scan, so they are
+	 * surfaced here purely so the user can return/clean them up.
+	 */
+	orphaned: boolean;
 }
 
 export interface ParsedBorrowConsole {
@@ -267,7 +274,7 @@ export class JenkinsBorrowClient {
 				}
 			}
 			if (borrower || leaseEndEpoch) {
-				rows.push({ pool: "office", machine: name, host: name, borrower, leaseEndEpoch });
+				rows.push({ pool: "office", machine: name, host: name, borrower, leaseEndEpoch, orphaned: false });
 			}
 		}
 		return rows;
