@@ -330,6 +330,12 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		workspacePath: string,
 	): Promise<RuntimeWorkspaceStateResponse> => {
 		if (deps.remoteProjects?.isRemoteWorkspaceId(workspaceId)) {
+			// The manager bounds this call (SSH tunnel + tRPC fetch have hard
+			// timeouts) and returns null when the remote runtime is down/rebuilding.
+			// We throw fast rather than hang so callers on hub-global paths (the
+			// snapshot builder / state broadcaster) can catch it and degrade to a
+			// null workspaceState — which lets the SPA still render the project list
+			// and switch away from an unavailable remote instead of freezing.
 			const remoteState = await deps.remoteProjects.getWorkspaceState(workspaceId);
 			if (!remoteState) {
 				throw new Error(`Remote workspace ${workspaceId} is not available.`);

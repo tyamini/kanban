@@ -37,9 +37,19 @@ export interface SshTunnel {
 	close: () => void;
 }
 
+export interface SshExecOptions {
+	/**
+	 * Hard ceiling for the command. Omit (the default) to wait indefinitely —
+	 * required for genuinely long operations like remote `npm install`/build.
+	 * Set a value for probe-class commands so a wedged/OOM'd remote surfaces an
+	 * error instead of leaving a half-open channel that never emits `close`.
+	 */
+	timeoutMs?: number;
+}
+
 export interface SshConnection {
 	connect: () => Promise<void>;
-	exec: (command: string) => Promise<SshExecResult>;
+	exec: (command: string, options?: SshExecOptions) => Promise<SshExecResult>;
 	uploadFile: (localPath: string, remotePath: string) => Promise<void>;
 	openTunnel: (remotePort: number) => Promise<SshTunnel>;
 	isConnected: () => boolean;
@@ -160,7 +170,7 @@ export function createSshConnection(options: SshConnectionOptions): SshConnectio
 				});
 		});
 
-	const exec = (command: string): Promise<SshExecResult> =>
+	const exec = (command: string, options: SshExecOptions = {}): Promise<SshExecResult> =>
 		new Promise((resolveExec, rejectExec) => {
 			client.exec(command, (error, stream) => {
 				if (error) {
@@ -170,6 +180,52 @@ export function createSshConnection(options: SshConnectionOptions): SshConnectio
 				let stdout = "";
 				let stderr = "";
 				let code: number | null = null;
+				let settled = false;
+				let timer: ReturnType<typeof setTimeout> | null = null;
+				const cleanup = (): void => {
+					if (timer) {
+						clearTimeout(timer);
+						timer = null;
+					}
+				};
+				const settleResolve = (result: SshExecResult): void => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					cleanup();
+					resolveExec(result);
+				};
+				const settleReject = (streamError: Error): void => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					cleanup();
+					rejectExec(streamError);
+				};
+				if (options.timeoutMs && options.timeoutMs > 0) {
+					timer = setTimeout(() => {
+						// Force the channel down so we do not leak it, then reject. A
+						// thrashing/OOM'd remote can keep a channel half-open forever
+						// without ever emitting `close`, which is the exact hang we are
+						// guarding against here.
+						try {
+							stream.close();
+						} catch {
+							// Ignore — best-effort teardown.
+						}
+						try {
+							stream.destroy();
+						} catch {
+							// Ignore — best-effort teardown.
+						}
+						settleReject(
+							new Error(`Remote command timed out after ${options.timeoutMs}ms: ${command.slice(0, 120)}`),
+						);
+					}, options.timeoutMs);
+					timer.unref?.();
+				}
 				stream.on("data", (chunk: Buffer) => {
 					stdout += chunk.toString("utf8");
 				});
@@ -180,10 +236,10 @@ export function createSshConnection(options: SshConnectionOptions): SshConnectio
 					code = exitCode;
 				});
 				stream.on("close", () => {
-					resolveExec({ code, stdout, stderr });
+					settleResolve({ code, stdout, stderr });
 				});
 				stream.on("error", (streamError: Error) => {
-					rejectExec(streamError);
+					settleReject(streamError);
 				});
 			});
 		});

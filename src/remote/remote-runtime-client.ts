@@ -19,6 +19,14 @@ import type { RuntimeAppRouter } from "../trpc/app-router";
 
 type RemoteTrpcClient = ReturnType<typeof createTRPCProxyClient<RuntimeAppRouter>>;
 
+// Probe-class remote calls that sit on hub-global / UI-blocking paths. Through
+// an SSH tunnel to a dead or thrashing remote runtime a TCP connect can accept
+// but never respond, so without an abort these fetches hang forever and freeze
+// the whole hub (including local boards). These deliberately do NOT wrap
+// long-running operations like project add (which may clone a repo).
+const HEALTH_FETCH_TIMEOUT_MS = 5_000;
+const REMOTE_QUERY_TIMEOUT_MS = 15_000;
+
 export interface RemoteStateStreamHandlers {
 	onMessage: (message: RuntimeStateStreamMessage) => void;
 	onClose: () => void;
@@ -71,20 +79,25 @@ export function createRemoteRuntimeClient(baseUrl: string): RemoteRuntimeClient 
 			try {
 				const response = await fetch(`${baseUrl}/api/passcode/status`, {
 					headers: { "Cache-Control": "no-store" },
+					signal: AbortSignal.timeout(HEALTH_FETCH_TIMEOUT_MS),
 				});
 				return response.ok;
 			} catch {
 				return false;
 			}
 		},
-		listProjects: async () => unscopedClient.projects.list.query(),
+		listProjects: async () =>
+			unscopedClient.projects.list.query(undefined, { signal: AbortSignal.timeout(REMOTE_QUERY_TIMEOUT_MS) }),
 		listDirectoryContents: async (input) =>
 			// Directory browsing is not workspace-scoped on the remote runtime.
 			getScopedClient(input.path ?? "__root__").projects.listDirectoryContents.query(input),
 		addProject: async (input) => unscopedClient.projects.add.mutate(input),
 		removeProject: async (nativeWorkspaceId) =>
 			unscopedClient.projects.remove.mutate({ projectId: nativeWorkspaceId }),
-		getWorkspaceState: async (nativeWorkspaceId) => getScopedClient(nativeWorkspaceId).workspace.getState.query(),
+		getWorkspaceState: async (nativeWorkspaceId) =>
+			getScopedClient(nativeWorkspaceId).workspace.getState.query(undefined, {
+				signal: AbortSignal.timeout(REMOTE_QUERY_TIMEOUT_MS),
+			}),
 		openStateStream: (nativeWorkspaceId, handlers) => {
 			const url = new URL(`${wsBaseUrl}/api/runtime/ws`);
 			url.searchParams.set("workspaceId", nativeWorkspaceId);

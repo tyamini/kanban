@@ -40,6 +40,30 @@ const MANAGED_NODE_DIR = "$HOME/.cline/kanban-node";
 // the hub re-ships and rebuilds whenever its own source changes.
 const REMOTE_BUILD_STAMP_FILE = ".kanban-hub-build";
 
+// Probe-class commands (version checks, stamp reads, log tails, spawning the
+// detached daemon) must finish quickly; a hang here means the remote is wedged,
+// so we bound them and surface an error instead of blocking the connect flow
+// forever on a half-open channel.
+const REMOTE_PROBE_TIMEOUT_MS = 20_000;
+const REMOTE_LAUNCH_TIMEOUT_MS = 60_000;
+// Long operations (Node download/extract, `npm install` + build) are expected
+// to take minutes on a fresh remote. We still apply a *generous* ceiling — far
+// longer than any real build here — purely to kill the infinite-hang failure
+// mode (thrashing/OOM box, dead channel). Overridable for slow hosts.
+const DEFAULT_REMOTE_BUILD_TIMEOUT_MS = 30 * 60_000;
+const REMOTE_BUILD_TIMEOUT_ENV = "KANBAN_REMOTE_BUILD_TIMEOUT_MS";
+
+function getRemoteBuildTimeoutMs(): number {
+	const raw = process.env[REMOTE_BUILD_TIMEOUT_ENV]?.trim();
+	if (raw) {
+		const parsed = Number.parseInt(raw, 10);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return DEFAULT_REMOTE_BUILD_TIMEOUT_MS;
+}
+
 export interface RemoteEnvironmentReport {
 	nodeVersion: string | null;
 	nodeSatisfiesMinimum: boolean;
@@ -58,7 +82,9 @@ export interface EnsureRemoteRuntimeResult {
 /** Reads the tail of the remote runtime log so failures can be surfaced to the user. */
 export async function readRemoteRuntimeLogTail(connection: SshConnection, lines = 40): Promise<string> {
 	try {
-		const result = await connection.exec(`bash -lc 'tail -n ${lines} "${REMOTE_RUNTIME_LOG}" 2>/dev/null || true'`);
+		const result = await connection.exec(`bash -lc 'tail -n ${lines} "${REMOTE_RUNTIME_LOG}" 2>/dev/null || true'`, {
+			timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+		});
 		return result.stdout.trim();
 	} catch {
 		return "";
@@ -107,7 +133,7 @@ function nodeSatisfiesMinimumVersion(versionOutput: string | null): boolean {
 }
 
 async function firstNonEmptyLine(connection: SshConnection, command: string): Promise<string | null> {
-	const result = await connection.exec(command);
+	const result = await connection.exec(command, { timeoutMs: REMOTE_PROBE_TIMEOUT_MS });
 	const value = result.stdout.trim();
 	return value.length > 0 ? value : null;
 }
@@ -122,7 +148,9 @@ export async function detectRemoteEnvironment(
 	const globalKanbanBinary = await firstNonEmptyLine(connection, "command -v kanban 2>/dev/null || true");
 
 	const installDir = options.remoteInstallDir ?? DEFAULT_REMOTE_INSTALL_DIR;
-	const installedProbe = await connection.exec(`test -f ${installDir}/dist/cli.js && echo yes || true`);
+	const installedProbe = await connection.exec(`test -f ${installDir}/dist/cli.js && echo yes || true`, {
+		timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+	});
 	const hasLocalInstall = installedProbe.stdout.trim() === "yes";
 
 	return {
@@ -150,14 +178,20 @@ async function ensureRemoteNode(
 	}
 
 	const managedPathPrefix = `export PATH="${MANAGED_NODE_DIR}/bin:$PATH"; `;
-	const managed = await connection.exec(`bash -lc '"${MANAGED_NODE_DIR}/bin/node" --version 2>/dev/null || true'`);
+	const managed = await connection.exec(`bash -lc '"${MANAGED_NODE_DIR}/bin/node" --version 2>/dev/null || true'`, {
+		timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
+	});
 	if (nodeSatisfiesMinimumVersion(managed.stdout)) {
 		return { pathPrefix: managedPathPrefix };
 	}
 
 	reportProgress(`Installing Node.js ${MANAGED_NODE_VERSION} on the remote host...`);
-	const osRaw = (await connection.exec("uname -s")).stdout.trim().toLowerCase();
-	const archRaw = (await connection.exec("uname -m")).stdout.trim().toLowerCase();
+	const osRaw = (await connection.exec("uname -s", { timeoutMs: REMOTE_PROBE_TIMEOUT_MS })).stdout
+		.trim()
+		.toLowerCase();
+	const archRaw = (await connection.exec("uname -m", { timeoutMs: REMOTE_PROBE_TIMEOUT_MS })).stdout
+		.trim()
+		.toLowerCase();
 	const os = osRaw.includes("darwin") ? "darwin" : "linux";
 	const arch =
 		archRaw === "x86_64" || archRaw === "amd64"
@@ -178,6 +212,7 @@ async function ensureRemoteNode(
 			`elif command -v wget >/dev/null 2>&1; then wget -qO node.tar.gz "${url}"; ` +
 			`else echo "NO_DOWNLOADER" >&2; exit 3; fi; ` +
 			`tar -xzf node.tar.gz --strip-components=1; rm -f node.tar.gz; "$DIR/bin/node" --version'`,
+		{ timeoutMs: getRemoteBuildTimeoutMs() },
 	);
 	if (install.code !== 0) {
 		if (install.stderr.includes("NO_DOWNLOADER")) {
@@ -288,6 +323,7 @@ function hashFile(path: string): Promise<string> {
 async function readRemoteBuildStamp(connection: SshConnection, installDir: string): Promise<string | null> {
 	const result = await connection.exec(
 		`bash -lc 'cat "${installDir}/${REMOTE_BUILD_STAMP_FILE}" 2>/dev/null || true'`,
+		{ timeoutMs: REMOTE_PROBE_TIMEOUT_MS },
 	);
 	const value = result.stdout.trim();
 	return value.length > 0 ? value : null;
@@ -297,7 +333,7 @@ async function resolveRemoteAbsoluteDir(connection: SshConnection, dir: string):
 	if (!dir.startsWith("~")) {
 		return dir;
 	}
-	const home = (await connection.exec("bash -lc 'echo $HOME'")).stdout.trim();
+	const home = (await connection.exec("bash -lc 'echo $HOME'", { timeoutMs: REMOTE_PROBE_TIMEOUT_MS })).stdout.trim();
 	return dir.replace(/^~/, home || "");
 }
 
@@ -315,7 +351,7 @@ async function transferAndBuildHubSource(
 	reportProgress: BootstrapProgressReporter,
 ): Promise<void> {
 	const absoluteInstallDir = await resolveRemoteAbsoluteDir(connection, installDir);
-	await connection.exec(`bash -lc 'mkdir -p "${absoluteInstallDir}"'`);
+	await connection.exec(`bash -lc 'mkdir -p "${absoluteInstallDir}"'`, { timeoutMs: REMOTE_PROBE_TIMEOUT_MS });
 	reportProgress("Uploading Kanban to the remote host...");
 	const remoteTarball = `${absoluteInstallDir}/kanban-src.tar.gz`;
 	await connection.uploadFile(tarballPath, remoteTarball);
@@ -327,6 +363,7 @@ async function transferAndBuildHubSource(
 			`tar -xzf kanban-src.tar.gz; rm -f kanban-src.tar.gz; ` +
 			`npm install --no-audit --no-fund; (cd web-ui && npm install --no-audit --no-fund); npm run build; ` +
 			`printf "%s" "${buildId}" > "${REMOTE_BUILD_STAMP_FILE}"'`,
+		{ timeoutMs: getRemoteBuildTimeoutMs() },
 	);
 	if (build.code !== 0) {
 		throw new Error(`Failed to build Kanban on the remote host: ${build.stderr || build.stdout}`);
@@ -346,6 +383,7 @@ async function cloneAndBuild(
 	reportProgress(`Cloning ${repoUrl} into ${installDir} on the remote host...`);
 	const clone = await connection.exec(
 		`bash -lc '${pathPrefix}set -e; mkdir -p ${installDir}; if [ ! -d ${installDir}/.git ]; then git clone ${repoUrl} ${installDir}; else (cd ${installDir} && git pull --ff-only); fi'`,
+		{ timeoutMs: getRemoteBuildTimeoutMs() },
 	);
 	if (clone.code !== 0) {
 		throw new Error(`Failed to clone Kanban on the remote host: ${clone.stderr || clone.stdout}`);
@@ -353,6 +391,7 @@ async function cloneAndBuild(
 	reportProgress("Installing dependencies and building on the remote host (this can take several minutes)...");
 	const build = await connection.exec(
 		`bash -lc '${pathPrefix}set -e; cd ${installDir}; npm ci && npm run build && (cd web-ui && npm ci) || true'`,
+		{ timeoutMs: getRemoteBuildTimeoutMs() },
 	);
 	if (build.code !== 0) {
 		throw new Error(`Failed to build Kanban on the remote host: ${build.stderr || build.stdout}`);
@@ -422,6 +461,7 @@ export async function ensureRemoteRuntime(
 	reportProgress("Starting the remote Kanban runtime...");
 	const launch = await connection.exec(
 		buildLaunchCommand({ remotePort, installDir, globalKanbanBinary, pathPrefix, forceRestart: didRebuild }),
+		{ timeoutMs: REMOTE_LAUNCH_TIMEOUT_MS },
 	);
 	const launched = launch.stdout.includes("LAUNCHED");
 
