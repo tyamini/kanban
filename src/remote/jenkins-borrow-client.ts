@@ -98,6 +98,10 @@ export class JenkinsBorrowClient {
 	private readonly authHeader: string;
 	private crumbHeader: Record<string, string> | null = null;
 	private readonly job: string;
+	// CSRF crumbs are bound to the HTTP session, so we must carry the session
+	// cookie (Jenkins renames JSESSIONID) from the crumb request onto the POST.
+	// Token-based auth used to be crumb-exempt; GitHub OAuth logins are not.
+	private readonly cookies = new Map<string, string>();
 
 	constructor(creds: JenkinsCreds, options: { baseUrl?: string; job?: string } = {}) {
 		this.base = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -105,13 +109,43 @@ export class JenkinsBorrowClient {
 		this.authHeader = `Basic ${Buffer.from(`${creds.user}:${creds.token}`).toString("base64")}`;
 	}
 
+	private captureCookies(response: Response): void {
+		const setCookies = response.headers.getSetCookie();
+		for (const setCookie of setCookies) {
+			const pair = setCookie.split(";", 1)[0] ?? "";
+			const eq = pair.indexOf("=");
+			if (eq <= 0) {
+				continue;
+			}
+			const name = pair.slice(0, eq).trim();
+			const value = pair.slice(eq + 1).trim();
+			if (name) {
+				this.cookies.set(name, value);
+			}
+		}
+	}
+
+	private cookieHeader(): string | null {
+		if (this.cookies.size === 0) {
+			return null;
+		}
+		return [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+	}
+
 	private async fetch(url: string, init: RequestInit = {}): Promise<Response> {
 		const fullUrl = url.startsWith("http") ? url : `${this.base}${url}`;
-		return await fetch(fullUrl, {
+		const cookie = this.cookieHeader();
+		const response = await fetch(fullUrl, {
 			...init,
-			headers: { Authorization: this.authHeader, ...(init.headers ?? {}) },
+			headers: {
+				Authorization: this.authHeader,
+				...(cookie ? { Cookie: cookie } : {}),
+				...(init.headers ?? {}),
+			},
 			redirect: "manual",
 		});
+		this.captureCookies(response);
+		return response;
 	}
 
 	private async getCrumb(): Promise<Record<string, string>> {
@@ -153,7 +187,10 @@ export class JenkinsBorrowClient {
 			body: new URLSearchParams(params).toString(),
 		});
 		if (resp.status === 401 || resp.status === 403) {
-			throw new Error(`Jenkins auth/permission error (HTTP ${resp.status}). Check the API token.`);
+			throw new Error(
+				`Jenkins auth/permission error (HTTP ${resp.status}). Check your \`gh\` login has access ` +
+					"(needs the `read:org` scope), or re-run `gh auth login`.",
+			);
 		}
 		if (resp.status >= 400) {
 			const detail = (await resp.text()).slice(0, 500);
