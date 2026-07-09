@@ -45,6 +45,13 @@ const GH_CONFIG_DIR_REL = ".config/gh";
 const GH_CONFIG_FILES = ["hosts.yml", "config.yml"];
 const CLAUDE_CREDENTIALS_REL = ".claude/.credentials.json";
 const CLAUDE_CONFIG_REL = ".claude.json";
+// The org's server-pushed managed settings (telemetry env). Claude Code writes
+// this file locally only after the user approves the one-time "managed settings
+// require approval" prompt, and skips that prompt on later runs when the on-disk
+// copy matches what the server pushes. Mirroring the hub's already-approved copy
+// pre-seeds that approval so borrowed machines run unsupervised without the
+// interactive trust prompt blocking the very first agent session.
+const CLAUDE_REMOTE_SETTINGS_REL = ".claude/remote-settings.json";
 
 // Auth/onboarding fields lifted from the hub's ~/.claude.json so Claude Code on
 // the borrowed machine skips the login + onboarding flow. We deliberately do
@@ -387,6 +394,17 @@ async function copyAuthCredentials(
 			await connection.exec(`bash -lc 'chmod 600 "${remoteConfig}"'`);
 		} finally {
 			await rm(configPath, { force: true });
+		}
+
+		// Pre-approve the org's managed telemetry settings so the one-time
+		// "managed settings require approval" prompt never blocks an unsupervised
+		// session. The remote and hub fetch identical settings from the same
+		// server, so the hub's approved copy matches and suppresses the prompt.
+		const localRemoteSettings = join(homedir(), CLAUDE_REMOTE_SETTINGS_REL);
+		if (existsSync(localRemoteSettings)) {
+			const remoteRemoteSettings = `${remoteHome}/${CLAUDE_REMOTE_SETTINGS_REL}`;
+			await connection.uploadFile(localRemoteSettings, remoteRemoteSettings);
+			await connection.exec(`bash -lc 'chmod 600 "${remoteRemoteSettings}"'`);
 		}
 	});
 }
