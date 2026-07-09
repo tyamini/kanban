@@ -142,6 +142,24 @@ upstream independently.
    Cline agent persists the full transcript and survives reloads. Server-side
    terminal-output logging for CLI agents is deferred follow-up work.
 
+9. **Borrow machines + unsupervised task agents** — `src/remote/borrow-machine-setup.ts`,
+   `src/remote/remote-runtime-bootstrap.ts`, `src/remote/ssh-connection-manager.ts`,
+   `src/remote/remote-runtime-client.ts`, `src/remote/gh-auth.ts`,
+   `src/remote/jenkins-borrow-client.ts`, `src/remote/jenkins-borrow-pools.ts`,
+   `src/server/workspace-registry.ts`, `src/server/task-orchestrator.ts`
+   Borrows a machine (AWS Jenkins pool / office box), provisions it over SSH, and
+   runs Kanban task agents on it. Jenkins auth uses a `gh` token (+ CSRF crumb/
+   cookie) instead of a static API token. Provisioning makes the box run agents
+   **unsupervised**: it installs a pinned `gh` (the GitHub API is 403-blocked on
+   the AWS pool), mirrors the hub's Claude login, and pre-satisfies every one-time
+   Claude Code prompt — managed-settings approval (`~/.claude/remote-settings.json`
+   is the acceptance artifact), the Bypass Permissions disclaimer
+   (`bypassPermissionsModeAccepted`), and per-folder trust (`CLAUDE_CODE_SANDBOXED=1`
+   in the remote runtime env). Remote calls are timeout-bounded and degrade to null
+   so a stalled remote can't freeze the hub. Full research + rationale:
+   `.ai/arch/borrowed-machine-provisioning.md`; the remote-stall investigation is
+   in `.plan/docs/remote-runtime-rebuild-stall-investigation.md`.
+
 ## Build & deploy
 
 Prerequisites: Node 22+ (`nvm use 22`).
