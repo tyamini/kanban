@@ -6,7 +6,7 @@
 // `ai-pull`.
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -44,6 +44,32 @@ const CONNECT_RETRY_DELAY_MS = 5000;
 const GH_CONFIG_DIR_REL = ".config/gh";
 const GH_CONFIG_FILES = ["hosts.yml", "config.yml"];
 const CLAUDE_CREDENTIALS_REL = ".claude/.credentials.json";
+const CLAUDE_CONFIG_REL = ".claude.json";
+
+// Auth/onboarding fields lifted from the hub's ~/.claude.json so Claude Code on
+// the borrowed machine skips the login + onboarding flow. We deliberately do
+// NOT copy the whole file: it also holds hub-specific `projects`, MCP wiring and
+// large caches keyed to the hub's paths, which are noise (or actively harmful)
+// on the remote. Just these fields + the copied `.credentials.json` token are
+// enough for Claude to consider itself logged in.
+const CLAUDE_CONFIG_KEEP_KEYS = [
+	"hasCompletedOnboarding",
+	"lastOnboardingVersion",
+	"userID",
+	"oauthAccount",
+	"firstStartTime",
+	"subscriptionNoticeCount",
+	"hasAvailableSubscription",
+	"isQualifiedForDataSharing",
+	"hasOpusPlanDefault",
+	"claudeCodeFirstTokenDate",
+] as const;
+
+// Pinned GitHub CLI version to install on borrowed machines. We install a fixed
+// version instead of querying `api.github.com/.../releases/latest` because some
+// borrow networks (notably the AWS pool) return HTTP 403 for the GitHub API even
+// though the release-asset download host is reachable. Overridable for bumps.
+const GH_VERSION = process.env.KANBAN_BORROW_GH_VERSION?.trim() || "2.62.0";
 
 // Installs the GitHub CLI into ~/.local/bin (no root) if it isn't already on the
 // machine. Uploaded as a script and run with `bash` to avoid nested-quote hell.
@@ -53,14 +79,15 @@ if command -v gh >/dev/null 2>&1; then
   echo "gh already installed: $(command -v gh)"
   exit 0
 fi
+# Version is pinned by the hub (GH_VERSION) rather than discovered from the
+# GitHub API, which is blocked (HTTP 403) on some borrow networks.
+ver="\${GH_VERSION:-2.62.0}"
 mkdir -p "$HOME/.local/bin"
 case "$(uname -m)" in
   x86_64|amd64) arch=amd64 ;;
   aarch64|arm64) arch=arm64 ;;
   *) arch=amd64 ;;
 esac
-ver="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"v\\{0,1\\}\\([^"]*\\)".*/\\1/p' | head -1)"
-if [ -z "$ver" ]; then echo "could not determine latest gh version" >&2; exit 1; fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://github.com/cli/cli/releases/download/v\${ver}/gh_\${ver}_linux_\${arch}.tar.gz" -o "$tmp/gh.tgz"
@@ -288,7 +315,7 @@ async function installGh(connection: SshConnection, remoteHome: string, report: 
 		try {
 			const remoteScript = `${remoteHome}/.kanban-install-gh.sh`;
 			await connection.uploadFile(scriptPath, remoteScript);
-			const result = await connection.exec(`bash "${remoteScript}"`);
+			const result = await connection.exec(`GH_VERSION=${GH_VERSION} bash "${remoteScript}"`);
 			// Clean up the uploaded script separately so the script's own exit code survives.
 			await connection.exec(`rm -f "${remoteScript}"`);
 			const tail = (result.stdout || result.stderr).trim().split("\n").slice(-3).join("\n");
@@ -344,7 +371,52 @@ async function copyAuthCredentials(
 		const remoteCreds = `${remoteHome}/${CLAUDE_CREDENTIALS_REL}`;
 		await connection.uploadFile(localCreds, remoteCreds);
 		await connection.exec(`bash -lc 'chmod 600 "${remoteCreds}"'`);
+
+		// The token alone isn't enough: without the onboarding/account state in
+		// ~/.claude.json, Claude Code re-runs the login/onboarding flow. Mirror a
+		// sanitized copy so it starts up already logged in.
+		const claudeConfig = await buildSanitizedClaudeConfig();
+		if (!claudeConfig) {
+			return;
+		}
+		const configPath = join(tmpdir(), `claude-config-${process.pid}-${Date.now()}.json`);
+		await writeFile(configPath, claudeConfig, { mode: 0o600 });
+		try {
+			const remoteConfig = `${remoteHome}/${CLAUDE_CONFIG_REL}`;
+			await connection.uploadFile(configPath, remoteConfig);
+			await connection.exec(`bash -lc 'chmod 600 "${remoteConfig}"'`);
+		} finally {
+			await rm(configPath, { force: true });
+		}
 	});
+}
+
+/**
+ * Read the hub's ~/.claude.json and keep only the auth/onboarding fields
+ * (see CLAUDE_CONFIG_KEEP_KEYS). Returns a JSON string, or null when the hub has
+ * no config or it can't be parsed.
+ */
+async function buildSanitizedClaudeConfig(): Promise<string | null> {
+	const localConfig = join(homedir(), CLAUDE_CONFIG_REL);
+	if (!existsSync(localConfig)) {
+		return null;
+	}
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(await readFile(localConfig, "utf8")) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+	const sanitized: Record<string, unknown> = {};
+	for (const key of CLAUDE_CONFIG_KEEP_KEYS) {
+		if (parsed[key] !== undefined) {
+			sanitized[key] = parsed[key];
+		}
+	}
+	if (sanitized.hasCompletedOnboarding === undefined && sanitized.oauthAccount === undefined) {
+		return null;
+	}
+	return JSON.stringify(sanitized, null, 2);
 }
 
 /**
