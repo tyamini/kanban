@@ -1,6 +1,7 @@
 // Configuration for the Jenkins "pools" Kanban can borrow machines from. Each
 // pool targets a different Jenkins instance + job with its own parameter schema,
-// credentials, borrowed-list strategy and post-borrow SSH settings. Office uses
+// borrowed-list strategy and post-borrow SSH settings. Both pools authenticate
+// with the same `gh`-derived GitHub credentials (see gh-auth.ts). Office uses
 // the classic `BorrowMachine` job (machines are Jenkins nodes); AWS uses
 // `BorrowMachineAI` (machines are EC2 instances reached by private IP).
 import {
@@ -9,10 +10,6 @@ import {
 	type BorrowMachineType,
 	type BorrowPoolId,
 	buildBorrowParams,
-	CREDS_FILE,
-	DEFAULT_JENKINS_USER,
-	type JenkinsCreds,
-	readJenkinsCredsFile,
 } from "./jenkins-borrow-client";
 
 export type { BorrowPoolId } from "./jenkins-borrow-client";
@@ -38,12 +35,6 @@ export interface BorrowPoolConfig {
 	label: string;
 	baseUrl: string;
 	job: string;
-	/** Env var + creds-file key for this pool's API token. */
-	tokenEnv: string;
-	fileTokenKey: string;
-	/** Env var + creds-file key for this pool's username (falls back to the shared user). */
-	userEnv: string;
-	fileUserKey: string;
 	types: readonly string[];
 	listStrategy: "nodeLabels" | "buildHistory";
 	ssh: BorrowPoolSshConfig;
@@ -58,10 +49,6 @@ export const BORROW_POOLS: Record<BorrowPoolId, BorrowPoolConfig> = {
 		label: "Office",
 		baseUrl: "https://jenkins.dev.drivenets.net",
 		job: "BorrowMachine",
-		tokenEnv: "JENKINS_API_TOKEN",
-		fileTokenKey: "JENKINS_API_TOKEN",
-		userEnv: "JENKINS_USER",
-		fileUserKey: "JENKINS_USER",
 		types: BORROW_MACHINE_TYPES,
 		listStrategy: "nodeLabels",
 		ssh: {
@@ -85,11 +72,6 @@ export const BORROW_POOLS: Record<BorrowPoolId, BorrowPoolConfig> = {
 		label: "AWS",
 		baseUrl: "https://jenkins-aws.dev.drivenets.net",
 		job: "BorrowMachineAI",
-		tokenEnv: "JENKINS_AWS_API_TOKEN",
-		fileTokenKey: "JENKINS_AWS_API_TOKEN",
-		// Same human/username as office; only the API token differs per instance.
-		userEnv: "JENKINS_AWS_USER",
-		fileUserKey: "JENKINS_AWS_USER",
 		types: AWS_INSTANCE_TYPES,
 		listStrategy: "buildHistory",
 		ssh: {
@@ -118,23 +100,4 @@ export const BORROW_POOLS: Record<BorrowPoolId, BorrowPoolConfig> = {
 
 export function listBorrowPools(): BorrowPoolConfig[] {
 	return Object.values(BORROW_POOLS);
-}
-
-/** Resolve credentials for a pool, preferring pool-specific values then shared ones. */
-export async function loadPoolCreds(pool: BorrowPoolConfig): Promise<JenkinsCreds> {
-	const fileMap = await readJenkinsCredsFile();
-	const user =
-		process.env[pool.userEnv]?.trim() ||
-		process.env.JENKINS_USER?.trim() ||
-		fileMap[pool.fileUserKey]?.trim() ||
-		fileMap.JENKINS_USER?.trim() ||
-		DEFAULT_JENKINS_USER;
-	const token = process.env[pool.tokenEnv]?.trim() || fileMap[pool.fileTokenKey]?.trim();
-	if (!token) {
-		throw new Error(
-			`Missing Jenkins API token for ${pool.label}. Set ${pool.tokenEnv} in the environment or ` +
-				`${pool.fileTokenKey} in ${CREDS_FILE} (create one at ${pool.baseUrl}/me/configure).`,
-		);
-	}
-	return { user, token };
 }

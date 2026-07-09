@@ -1,10 +1,12 @@
 // Post-borrow provisioning: after Jenkins finishes borrowing a machine and
 // before it is marked ready, connect over SSH and set it up — install Claude
 // Code, replicate the local AI-helpers repo (with .git so `ai-pull` works),
-// copy the local .bashrc + its dependency, and run `ai-pull`.
+// copy the local .bashrc + its dependency, install the GitHub CLI, mirror the
+// local `gh` + Claude logins so both are authenticated on the machine, and run
+// `ai-pull`.
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +37,37 @@ const BASHRC_DIRS = [".bash"];
 const CLAUDE_INSTALL_CMD = "bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'";
 const CONNECT_RETRIES = 5;
 const CONNECT_RETRY_DELAY_MS = 5000;
+
+// Local logins mirrored onto the borrowed machine so `gh` and Claude Code are
+// authenticated there. These are portable bearer credentials (OAuth tokens with
+// refresh), so copying the files is enough — no interactive re-login needed.
+const GH_CONFIG_DIR_REL = ".config/gh";
+const GH_CONFIG_FILES = ["hosts.yml", "config.yml"];
+const CLAUDE_CREDENTIALS_REL = ".claude/.credentials.json";
+
+// Installs the GitHub CLI into ~/.local/bin (no root) if it isn't already on the
+// machine. Uploaded as a script and run with `bash` to avoid nested-quote hell.
+const GH_INSTALL_SCRIPT = `#!/usr/bin/env bash
+set -euo pipefail
+if command -v gh >/dev/null 2>&1; then
+  echo "gh already installed: $(command -v gh)"
+  exit 0
+fi
+mkdir -p "$HOME/.local/bin"
+case "$(uname -m)" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) arch=amd64 ;;
+esac
+ver="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"v\\{0,1\\}\\([^"]*\\)".*/\\1/p' | head -1)"
+if [ -z "$ver" ]; then echo "could not determine latest gh version" >&2; exit 1; fi
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL "https://github.com/cli/cli/releases/download/v\${ver}/gh_\${ver}_linux_\${arch}.tar.gz" -o "$tmp/gh.tgz"
+tar -xzf "$tmp/gh.tgz" -C "$tmp"
+install -m 0755 "$tmp/gh_\${ver}_linux_\${arch}/bin/gh" "$HOME/.local/bin/gh"
+echo "installed gh \${ver} to $HOME/.local/bin/gh"
+`;
 
 export type SetupProgressReporter = (message: string) => void;
 
@@ -248,6 +281,72 @@ async function runAiPull(connection: SshConnection, report: SetupProgressReporte
 	});
 }
 
+async function installGh(connection: SshConnection, remoteHome: string, report: SetupProgressReporter): Promise<void> {
+	await runStep(report, "Installing GitHub CLI", async () => {
+		const scriptPath = join(tmpdir(), `gh-install-${process.pid}-${Date.now()}.sh`);
+		await writeFile(scriptPath, GH_INSTALL_SCRIPT, { mode: 0o700 });
+		try {
+			const remoteScript = `${remoteHome}/.kanban-install-gh.sh`;
+			await connection.uploadFile(scriptPath, remoteScript);
+			const result = await connection.exec(`bash "${remoteScript}"`);
+			// Clean up the uploaded script separately so the script's own exit code survives.
+			await connection.exec(`rm -f "${remoteScript}"`);
+			const tail = (result.stdout || result.stderr).trim().split("\n").slice(-3).join("\n");
+			if (tail) {
+				report(tail);
+			}
+			if (result.code !== 0) {
+				throw new Error(result.stderr.trim().split("\n").slice(-3).join("\n") || `exit ${result.code}`);
+			}
+		} finally {
+			await rm(scriptPath, { force: true });
+		}
+	});
+}
+
+/** Create a remote directory (best-effort mkdir -p) with private (700) permissions. */
+async function ensureRemoteDir(connection: SshConnection, remoteDir: string): Promise<void> {
+	const result = await connection.exec(`bash -lc 'mkdir -p "${remoteDir}" && chmod 700 "${remoteDir}"'`);
+	if (result.code !== 0) {
+		throw new Error(result.stderr.trim() || `could not create ${remoteDir} (exit ${result.code})`);
+	}
+}
+
+// Mirror the hub's `gh` and Claude logins so both are authenticated on the
+// borrowed machine. The credential files are copied with tight (600) perms.
+async function copyAuthCredentials(
+	connection: SshConnection,
+	remoteHome: string,
+	report: SetupProgressReporter,
+): Promise<void> {
+	await runStep(report, "Authenticating gh from hub login", async () => {
+		const localGhDir = join(homedir(), GH_CONFIG_DIR_REL);
+		const present = GH_CONFIG_FILES.filter((file) => existsSync(join(localGhDir, file)));
+		if (!present.includes("hosts.yml")) {
+			throw new Error("no local gh login found; run `gh auth login` on the hub");
+		}
+		const remoteGhDir = `${remoteHome}/${GH_CONFIG_DIR_REL}`;
+		await ensureRemoteDir(connection, remoteGhDir);
+		for (const file of present) {
+			const remoteFile = `${remoteGhDir}/${file}`;
+			await connection.uploadFile(join(localGhDir, file), remoteFile);
+			await connection.exec(`bash -lc 'chmod 600 "${remoteFile}"'`);
+		}
+	});
+
+	await runStep(report, "Authenticating Claude from hub login", async () => {
+		const localCreds = join(homedir(), CLAUDE_CREDENTIALS_REL);
+		if (!existsSync(localCreds)) {
+			throw new Error("no local ~/.claude/.credentials.json; run `claude` and log in on the hub");
+		}
+		const remoteClaudeDir = `${remoteHome}/.claude`;
+		await ensureRemoteDir(connection, remoteClaudeDir);
+		const remoteCreds = `${remoteHome}/${CLAUDE_CREDENTIALS_REL}`;
+		await connection.uploadFile(localCreds, remoteCreds);
+		await connection.exec(`bash -lc 'chmod 600 "${remoteCreds}"'`);
+	});
+}
+
 /**
  * Provision a freshly-borrowed machine. Steps are best-effort and reported to
  * the borrow job log; only a total SSH-connect failure aborts provisioning.
@@ -265,6 +364,8 @@ export async function provisionBorrowedMachine(
 		await replicatePrivateRepo(connection, remoteHome, report);
 		await copyBashrc(connection, remoteHome, report);
 		await ensureClaudeOnPath(connection, remoteHome, report);
+		await installGh(connection, remoteHome, report);
+		await copyAuthCredentials(connection, remoteHome, report);
 		await runAiPull(connection, report);
 		report("Setup complete.");
 	} finally {

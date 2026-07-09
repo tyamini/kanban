@@ -2,18 +2,10 @@
 // Jenkins REST API to borrow / return / extend a CI machine and to list the
 // machines currently borrowed by the user (from node labels). Kept close to the
 // original script's logic, including the console-parsing regexes.
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 export type BorrowPoolId = "office" | "aws";
 
 const DEFAULT_BASE_URL = "https://jenkins.dev.drivenets.net";
 const DEFAULT_JOB = "BorrowMachine";
-export const CREDS_FILE = join(homedir(), ".config", "borrow-machine-jenkins.env");
-// The username is effectively fixed for this deployment; the token is read from
-// the environment or the creds file so it is never committed to the repo.
-export const DEFAULT_JENKINS_USER = "tyamini";
 
 export const BORROW_MACHINE_TYPES = [
 	"tiny",
@@ -96,31 +88,6 @@ export interface JenkinsBuildInfo {
 }
 
 export type ProgressReporter = (message: string) => void;
-
-/** Parse the borrow creds file into a raw key→value map (best-effort). */
-export async function readJenkinsCredsFile(): Promise<Record<string, string>> {
-	try {
-		const raw = await readFile(CREDS_FILE, "utf8");
-		const map: Record<string, string> = {};
-		for (const line of raw.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
-				continue;
-			}
-			const [key, ...rest] = trimmed.split("=");
-			const value = rest
-				.join("=")
-				.trim()
-				.replace(/^["']|["']$/g, "");
-			if (key?.trim()) {
-				map[key.trim()] = value;
-			}
-		}
-		return map;
-	} catch {
-		return {};
-	}
-}
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));

@@ -5,6 +5,7 @@
 // machines currently borrowed by the user for each pool.
 import { randomUUID } from "node:crypto";
 import { provisionBorrowedMachine } from "./borrow-machine-setup";
+import { resolveGithubCliCreds } from "./gh-auth";
 import {
 	type BorrowedMachine,
 	type BorrowPoolId,
@@ -13,7 +14,7 @@ import {
 	parseAwsBorrowConsole,
 	parseBorrowConsole,
 } from "./jenkins-borrow-client";
-import { BORROW_POOLS, type BorrowPoolConfig, listBorrowPools, loadPoolCreds } from "./jenkins-borrow-pools";
+import { BORROW_POOLS, type BorrowPoolConfig, listBorrowPools } from "./jenkins-borrow-pools";
 
 const POLL_INTERVAL_MS = 15_000;
 const QUEUE_TIMEOUT_MS = 10 * 60_000;
@@ -77,7 +78,6 @@ export function createBorrowMachineManager(options: { warn?: (message: string) =
 	const warn = options.warn ?? (() => {});
 	const jobs = new Map<string, BorrowJob>();
 	const changeListeners = new Set<() => void>();
-	const credsPromises = new Map<BorrowPoolId, Promise<JenkinsCreds>>();
 	const poolStates = new Map<BorrowPoolId, PoolRuntimeState>();
 	// AWS-only: instances borrowed via this Kanban instance, kept until a Return
 	// succeeds (covers the gap before the build-history scan picks them up).
@@ -104,22 +104,12 @@ export function createBorrowMachineManager(options: { warn?: (message: string) =
 		return state;
 	};
 
-	const getCreds = (pool: BorrowPoolConfig): Promise<JenkinsCreds> => {
-		let promise = credsPromises.get(pool.id);
-		if (!promise) {
-			// Drop the cached promise on failure so a later token fix is picked up
-			// without restarting the server.
-			promise = loadPoolCreds(pool).catch((error) => {
-				credsPromises.delete(pool.id);
-				throw error;
-			});
-			credsPromises.set(pool.id, promise);
-		}
-		return promise;
-	};
-
+	// Both Jenkins pools authenticate against github.com via their GitHub OAuth
+	// realm, so a single `gh`-derived token/login works for both. The resolver
+	// memoizes internally and drops its cache on failure, so a later
+	// `gh auth login` is picked up without restarting the server.
 	const clientFor = async (pool: BorrowPoolConfig): Promise<{ client: JenkinsBorrowClient; creds: JenkinsCreds }> => {
-		const creds = await getCreds(pool);
+		const creds = await resolveGithubCliCreds();
 		return { client: new JenkinsBorrowClient(creds, { baseUrl: pool.baseUrl, job: pool.job }), creds };
 	};
 
