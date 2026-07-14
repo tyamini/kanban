@@ -104,6 +104,7 @@ import type {
 	RuntimeUpdateStatusResponse,
 	RuntimeWorkspaceChangesRequest,
 	RuntimeWorkspaceChangesResponse,
+	RuntimeWorkspaceChangesWorkspaceRequest,
 	RuntimeWorkspaceFileSearchRequest,
 	RuntimeWorkspaceFileSearchResponse,
 	RuntimeWorkspaceSkillsRequest,
@@ -215,6 +216,7 @@ import {
 	runtimeUpdateStatusResponseSchema,
 	runtimeWorkspaceChangesRequestSchema,
 	runtimeWorkspaceChangesResponseSchema,
+	runtimeWorkspaceChangesWorkspaceRequestSchema,
 	runtimeWorkspaceFileSearchRequestSchema,
 	runtimeWorkspaceFileSearchResponseSchema,
 	runtimeWorkspaceSkillsRequestSchema,
@@ -384,7 +386,10 @@ export interface RuntimeTrpcContext {
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeWorkspaceStateSaveRequest,
 		) => Promise<RuntimeWorkspaceStateResponse>;
-		loadWorkspaceChanges: (scope: RuntimeTrpcWorkspaceScope) => Promise<RuntimeWorkspaceChangesResponse>;
+		loadWorkspaceChanges: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input?: RuntimeWorkspaceChangesWorkspaceRequest,
+		) => Promise<RuntimeWorkspaceChangesResponse>;
 		loadGitLog: (scope: RuntimeTrpcWorkspaceScope, input: RuntimeGitLogRequest) => Promise<RuntimeGitLogResponse>;
 		loadGitRefs: (
 			scope: RuntimeTrpcWorkspaceScope,
@@ -747,9 +752,12 @@ export const runtimeAppRouter = t.router({
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.workspaceApi.saveState(ctx.workspaceScope, input);
 			}),
-		getWorkspaceChanges: workspaceProcedure.output(runtimeWorkspaceChangesResponseSchema).query(async ({ ctx }) => {
-			return await ctx.workspaceApi.loadWorkspaceChanges(ctx.workspaceScope);
-		}),
+		getWorkspaceChanges: workspaceProcedure
+			.input(runtimeWorkspaceChangesWorkspaceRequestSchema.optional())
+			.output(runtimeWorkspaceChangesResponseSchema)
+			.query(async ({ ctx, input }) => {
+				return await ctx.workspaceApi.loadWorkspaceChanges(ctx.workspaceScope, input ?? undefined);
+			}),
 		getGitLog: workspaceProcedure
 			.input(runtimeGitLogRequestSchema)
 			.output(runtimeGitLogResponseSchema)

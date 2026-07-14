@@ -10,6 +10,7 @@ import type {
 	RuntimeGitSyncSummary,
 	RuntimeWorkspaceChangesResponse,
 } from "@/runtime/types";
+import { mergeLazyFileContent, useLazyDiffContent } from "@/runtime/use-lazy-diff-content";
 import { useTrpcQuery } from "@/runtime/use-trpc-query";
 
 export type GitHistoryViewMode = "working-copy" | "commit";
@@ -55,6 +56,8 @@ export interface UseGitHistoryDataResult {
 	isDiffLoading: boolean;
 	diffErrorMessage: string | null;
 	selectedDiffPath: string | null;
+	workingCopyTruncated: boolean;
+	requestFileContent: (path: string) => void;
 	selectWorkingCopy: () => void;
 	selectRef: (ref: RuntimeGitRef) => void;
 	selectCommit: (commit: RuntimeGitCommit) => void;
@@ -489,20 +492,40 @@ export function useGitHistoryData({
 		setSelectedDiffPath(null);
 	}, []);
 
+	const workingCopyTruncated = workingCopyQuery.data?.truncated ?? false;
+	const lazyContentScopeKey = `${workspaceId ?? "__none__"}::${taskScope?.taskId ?? "__none__"}::${taskScope?.baseRef ?? "__none__"}::working-copy`;
+	const fetchWorkingCopyFileContent = useCallback(
+		async (path: string) => {
+			if (!workspaceId) {
+				return null;
+			}
+			const trpc = getRuntimeTrpcClient(workspaceId);
+			const response = taskScope
+				? await trpc.workspace.getChanges.query({ ...taskScope, path })
+				: await trpc.workspace.getWorkspaceChanges.query({ path });
+			return response.files.find((file) => file.path === path) ?? null;
+		},
+		[taskScope, workspaceId],
+	);
+	const { contentByPath, requestFileContent } = useLazyDiffContent({
+		scopeKey: lazyContentScopeKey,
+		fetchFileContent: fetchWorkingCopyFileContent,
+	});
+
 	const diffSource = useMemo((): GitCommitDiffSource | null => {
 		if (viewMode === "working-copy") {
 			const files = workingCopyQuery.data?.files;
 			if (!files) {
 				return null;
 			}
-			return { type: "working-copy", files };
+			return { type: "working-copy", files: mergeLazyFileContent(files, contentByPath) };
 		}
 		const commitFiles = diffQuery.data?.files;
 		if (!commitFiles) {
 			return null;
 		}
 		return { type: "commit", files: commitFiles };
-	}, [diffQuery.data?.files, viewMode, workingCopyQuery.data?.files]);
+	}, [contentByPath, diffQuery.data?.files, viewMode, workingCopyQuery.data?.files]);
 
 	const selectedCommit = commits.find((commit) => commit.hash === selectedCommitHash) ?? null;
 	const isDiffLoading =
@@ -601,6 +624,8 @@ export function useGitHistoryData({
 		isDiffLoading: isScopeTransitioning || isRefsLoadingVisible || isLogLoadingVisible || isDiffLoading,
 		diffErrorMessage: visibleDiffErrorMessage,
 		selectedDiffPath: visibleSelectedDiffPath,
+		workingCopyTruncated: isScopeTransitioning ? false : viewMode === "working-copy" && workingCopyTruncated,
+		requestFileContent,
 		selectWorkingCopy,
 		selectRef,
 		selectCommit,

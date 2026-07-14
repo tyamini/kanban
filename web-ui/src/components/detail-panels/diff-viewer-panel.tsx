@@ -511,6 +511,8 @@ export function DiffViewerPanel({
 	comments,
 	onCommentsChange,
 	viewMode = "unified",
+	truncated = false,
+	onRequestFileContent,
 }: {
 	workspaceFiles: RuntimeWorkspaceFileChange[] | null;
 	selectedPath: string | null;
@@ -520,6 +522,8 @@ export function DiffViewerPanel({
 	comments: Map<string, DiffLineComment>;
 	onCommentsChange: (comments: Map<string, DiffLineComment>) => void;
 	viewMode?: DiffViewMode;
+	truncated?: boolean;
+	onRequestFileContent?: (path: string) => void;
 }): React.ReactElement {
 	const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -712,6 +716,33 @@ export function DiffViewerPanel({
 		[comments, onCommentsChange],
 	);
 
+	const pendingContentPaths = useMemo(() => {
+		return new Set(
+			(workspaceFiles ?? [])
+				.filter((file) => file.oldText === null && file.newText === null)
+				.map((file) => file.path),
+		);
+	}, [workspaceFiles]);
+
+	useEffect(() => {
+		if (!truncated || !selectedPath) {
+			return;
+		}
+		setExpandedPaths((prev) => (prev[selectedPath] ? prev : { ...prev, [selectedPath]: true }));
+	}, [truncated, selectedPath]);
+
+	useEffect(() => {
+		if (!truncated || !onRequestFileContent) {
+			return;
+		}
+		for (const group of groupedByPath) {
+			const isExpanded = expandedPaths[group.path] ?? false;
+			if (isExpanded && pendingContentPaths.has(group.path)) {
+				onRequestFileContent(group.path);
+			}
+		}
+	}, [truncated, onRequestFileContent, groupedByPath, expandedPaths, pendingContentPaths]);
+
 	const nonEmptyComments = useMemo(() => {
 		return Array.from(comments.values()).filter((c) => c.comment.trim().length > 0);
 	}, [comments]);
@@ -835,9 +866,18 @@ export function DiffViewerPanel({
 							padding: "0 12px 12px",
 						}}
 					>
+						{truncated ? (
+							<div
+								className="mt-3 rounded-md border border-status-orange/40 bg-surface-1 px-3 py-2 text-xs text-text-secondary"
+								role="status"
+							>
+								Large changeset ({groupedByPath.length} files). File contents load when you expand a file.
+							</div>
+						) : null}
 						{groupedByPath.map((group) => {
-							const isExpanded = expandedPaths[group.path] ?? true;
+							const isExpanded = expandedPaths[group.path] ?? !truncated;
 							const hasBinaryEntry = group.entries.some((entry) => entry.isBinary);
+							const isContentPending = truncated && pendingContentPaths.has(group.path);
 							return (
 								<section
 									key={group.path}
@@ -855,7 +895,7 @@ export function DiffViewerPanel({
 											const container = scrollContainerRef.current;
 											const sectionEl = sectionElementsRef.current[group.path];
 											const previousTop = sectionEl?.getBoundingClientRect().top ?? null;
-											const nextExpanded = !(expandedPaths[group.path] ?? true);
+											const nextExpanded = !(expandedPaths[group.path] ?? !truncated);
 											suppressScrollSyncUntilRef.current = Date.now() + 250;
 											setExpandedPaths((prev) => ({
 												...prev,
@@ -887,43 +927,56 @@ export function DiffViewerPanel({
 											className="rounded-b-md border-x border-b border-border bg-surface-1"
 											style={{ overflow: "hidden" }}
 										>
-											{group.entries.map((entry) => (
-												<div key={entry.id} className="kb-diff-entry">
-													{entry.isBinary ? null : viewMode === "split" ? (
-														<SplitDiff
-															path={group.path}
-															oldText={entry.oldText}
-															newText={entry.newText}
-															comments={comments}
-															onAddComment={(lineNumber, lineText, variant) =>
-																handleAddComment(group.path, lineNumber, lineText, variant)
-															}
-															onUpdateComment={(lineNumber, variant, text) =>
-																handleUpdateComment(group.path, lineNumber, variant, text)
-															}
-															onDeleteComment={(lineNumber, variant) =>
-																handleDeleteComment(group.path, lineNumber, variant)
-															}
-														/>
-													) : (
-														<UnifiedDiff
-															path={group.path}
-															oldText={entry.oldText}
-															newText={entry.newText}
-															comments={comments}
-															onAddComment={(lineNumber, lineText, variant) =>
-																handleAddComment(group.path, lineNumber, lineText, variant)
-															}
-															onUpdateComment={(lineNumber, variant, text) =>
-																handleUpdateComment(group.path, lineNumber, variant, text)
-															}
-															onDeleteComment={(lineNumber, variant) =>
-																handleDeleteComment(group.path, lineNumber, variant)
-															}
-														/>
-													)}
+											{isContentPending ? (
+												<div
+													style={{
+														padding: "12px",
+														fontSize: 12,
+														color: "var(--color-text-tertiary)",
+													}}
+												>
+													Loading diff…
 												</div>
-											))}
+											) : null}
+											{isContentPending
+												? null
+												: group.entries.map((entry) => (
+														<div key={entry.id} className="kb-diff-entry">
+															{entry.isBinary ? null : viewMode === "split" ? (
+																<SplitDiff
+																	path={group.path}
+																	oldText={entry.oldText}
+																	newText={entry.newText}
+																	comments={comments}
+																	onAddComment={(lineNumber, lineText, variant) =>
+																		handleAddComment(group.path, lineNumber, lineText, variant)
+																	}
+																	onUpdateComment={(lineNumber, variant, text) =>
+																		handleUpdateComment(group.path, lineNumber, variant, text)
+																	}
+																	onDeleteComment={(lineNumber, variant) =>
+																		handleDeleteComment(group.path, lineNumber, variant)
+																	}
+																/>
+															) : (
+																<UnifiedDiff
+																	path={group.path}
+																	oldText={entry.oldText}
+																	newText={entry.newText}
+																	comments={comments}
+																	onAddComment={(lineNumber, lineText, variant) =>
+																		handleAddComment(group.path, lineNumber, lineText, variant)
+																	}
+																	onUpdateComment={(lineNumber, variant, text) =>
+																		handleUpdateComment(group.path, lineNumber, variant, text)
+																	}
+																	onDeleteComment={(lineNumber, variant) =>
+																		handleDeleteComment(group.path, lineNumber, variant)
+																	}
+																/>
+															)}
+														</div>
+													))}
 										</div>
 									) : null}
 								</section>

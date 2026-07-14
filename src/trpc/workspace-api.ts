@@ -277,6 +277,7 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 		},
 		loadChanges: async (workspaceScope, input) => {
 			const normalizedInput = normalizeRequiredTaskWorkspaceScopeInput(input);
+			const onlyPath = input.path?.trim() || undefined;
 			let taskCwd: string;
 			try {
 				taskCwd = await resolveTaskCwd({
@@ -307,18 +308,24 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 					return await createEmptyWorkspaceChangesResponse(taskCwd);
 				}
 				if (summary?.state === "running" || !fromCheckpoint) {
-					return await getWorkspaceChangesFromRef({
+					const fromRefInput = {
 						cwd: taskCwd,
 						fromRef: toCheckpoint.commit,
-					});
+					};
+					return onlyPath
+						? await getWorkspaceChangesFromRef(fromRefInput, { onlyPath })
+						: await getWorkspaceChangesFromRef(fromRefInput);
 				}
-				return await getWorkspaceChangesBetweenRefs({
+				const betweenRefsInput = {
 					cwd: taskCwd,
 					fromRef: fromCheckpoint.commit,
 					toRef: toCheckpoint.commit,
-				});
+				};
+				return onlyPath
+					? await getWorkspaceChangesBetweenRefs(betweenRefsInput, { onlyPath })
+					: await getWorkspaceChangesBetweenRefs(betweenRefsInput);
 			}
-			return await getWorkspaceChanges(taskCwd);
+			return onlyPath ? await getWorkspaceChanges(taskCwd, { onlyPath }) : await getWorkspaceChanges(taskCwd);
 		},
 		ensureWorktree: async (workspaceScope, input) => {
 			const body = parseWorktreeEnsureRequest(input);
@@ -394,8 +401,11 @@ export function createWorkspaceApi(deps: CreateWorkspaceApiDependencies): Runtim
 				throw error;
 			}
 		},
-		loadWorkspaceChanges: async (workspaceScope) => {
-			return await getWorkspaceChanges(workspaceScope.workspacePath);
+		loadWorkspaceChanges: async (workspaceScope, input) => {
+			const onlyPath = input?.path?.trim() || undefined;
+			return onlyPath
+				? await getWorkspaceChanges(workspaceScope.workspacePath, { onlyPath })
+				: await getWorkspaceChanges(workspaceScope.workspacePath);
 		},
 		loadGitLog: async (workspaceScope, input) => {
 			const taskScope = normalizeOptionalTaskWorkspaceScopeInput(input.taskScope ?? null);

@@ -44,6 +44,8 @@ function createGitHistory(): UseGitHistoryDataResult {
 		isDiffLoading: false,
 		diffErrorMessage: null,
 		selectedDiffPath: null,
+		workingCopyTruncated: false,
+		requestFileContent: () => {},
 		selectWorkingCopy: () => {},
 		selectRef: () => {},
 		selectCommit: () => {},

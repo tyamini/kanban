@@ -42,6 +42,8 @@ function createGitHistoryResult(): UseGitActionsResult["gitHistory"] {
 		isDiffLoading: false,
 		diffErrorMessage: null,
 		selectedDiffPath: null,
+		workingCopyTruncated: false,
+		requestFileContent: () => {},
 		selectWorkingCopy: () => {},
 		selectRef: () => {},
 		selectCommit: () => {},

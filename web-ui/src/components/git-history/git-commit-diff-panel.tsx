@@ -80,6 +80,8 @@ export function GitCommitDiffPanel({
 	selectedPath,
 	onSelectPath,
 	headerContent,
+	truncated = false,
+	onRequestFileContent,
 }: {
 	diffSource: GitCommitDiffSource | null;
 	isLoading: boolean;
@@ -87,6 +89,8 @@ export function GitCommitDiffPanel({
 	selectedPath: string | null;
 	onSelectPath: (path: string | null) => void;
 	headerContent?: React.ReactNode;
+	truncated?: boolean;
+	onRequestFileContent?: (path: string) => void;
 }): React.ReactElement {
 	const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
 	const { fileTreePanelRatio, setFileTreePanelRatio } = useGitCommitDiffLayout();
@@ -148,6 +152,29 @@ export function GitCommitDiffPanel({
 		}
 		onSelectPath(filePaths[0] ?? null);
 	}, [filePaths, selectedPath, onSelectPath]);
+
+	useEffect(() => {
+		if (!truncated || !selectedPath) {
+			return;
+		}
+		setExpandedPaths((prev) => (prev[selectedPath] ? prev : { ...prev, [selectedPath]: true }));
+	}, [truncated, selectedPath]);
+
+	useEffect(() => {
+		if (!truncated || !onRequestFileContent || diffSource?.type !== "working-copy") {
+			return;
+		}
+		for (const path of filePaths) {
+			const isExpanded = expandedPaths[path] ?? false;
+			if (!isExpanded || isBinaryFilePath(path)) {
+				continue;
+			}
+			const file = diffSource.files.find((candidate) => candidate.path === path);
+			if (file && file.oldText === null && file.newText === null) {
+				onRequestFileContent(path);
+			}
+		}
+	}, [truncated, onRequestFileContent, diffSource, filePaths, expandedPaths]);
 
 	const resolveActivePath = useCallback((): string | null => {
 		const container = scrollContainerRef.current;
@@ -340,12 +367,30 @@ export function GitCommitDiffPanel({
 						padding: "0 12px 12px",
 					}}
 				>
+					{truncated ? (
+						<div
+							className="mt-3 rounded-md border border-status-orange/40 bg-surface-1 px-3 py-2 text-xs text-text-secondary"
+							role="status"
+						>
+							Large changeset ({filePaths.length} files). File contents load when you expand a file.
+						</div>
+					) : null}
 					{filePaths.map((path) => {
-						const isExpanded = expandedPaths[path] ?? true;
+						const isExpanded = expandedPaths[path] ?? !truncated;
 						const stats = diffSource ? getFileStats(diffSource, path) : { additions: 0, deletions: 0 };
 						const rows = diffSource ? getFileRows(diffSource, path) : [];
 						const commitFile = getCommitFile(diffSource, path);
 						const isBinaryFile = isBinaryFilePath(path);
+						const workingCopyFile =
+							diffSource?.type === "working-copy"
+								? (diffSource.files.find((candidate) => candidate.path === path) ?? null)
+								: null;
+						const isContentPending =
+							truncated &&
+							!isBinaryFile &&
+							workingCopyFile !== null &&
+							workingCopyFile.oldText === null &&
+							workingCopyFile.newText === null;
 
 						return (
 							<section
@@ -412,9 +457,19 @@ export function GitCommitDiffPanel({
 													Renamed from <code className="font-mono">{commitFile.previousPath}</code>
 												</div>
 											) : null}
-											{!isBinaryFile && rows.length > 0 ? (
+											{isBinaryFile ? null : isContentPending ? (
+												<div
+													style={{
+														padding: "12px",
+														fontSize: 12,
+														color: "var(--color-text-tertiary)",
+													}}
+												>
+													Loading diff…
+												</div>
+											) : rows.length > 0 ? (
 												<ReadOnlyUnifiedDiff rows={rows} path={path} />
-											) : !isBinaryFile ? (
+											) : (
 												<div
 													style={{
 														padding: "12px",
@@ -424,7 +479,7 @@ export function GitCommitDiffPanel({
 												>
 													No textual diff available.
 												</div>
-											) : null}
+											)}
 										</div>
 									</div>
 								) : null}

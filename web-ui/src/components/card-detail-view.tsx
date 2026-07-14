@@ -19,6 +19,7 @@ import { ResizeHandle } from "@/resize/resize-handle";
 import { useCardDetailLayout } from "@/resize/use-card-detail-layout";
 import { useResizeDrag } from "@/resize/use-resize-drag";
 import { isNativeClineAgentSelected } from "@/runtime/native-agent";
+import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
 	RuntimeAgentId,
 	RuntimeClineReasoningEffort,
@@ -27,6 +28,7 @@ import type {
 	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceChangesMode,
 } from "@/runtime/types";
+import { mergeLazyFileContent, useLazyDiffContent } from "@/runtime/use-lazy-diff-content";
 import { useRuntimeWorkspaceChanges } from "@/runtime/use-runtime-workspace-changes";
 import { useTaskWorkspaceStateVersionValue } from "@/stores/workspace-metadata-store";
 import { useTerminalThemeColors } from "@/terminal/theme-colors";
@@ -501,7 +503,31 @@ export function CardDetailView({
 		lastTurnViewKey,
 		true,
 	);
-	const runtimeFiles = workspaceChanges?.files ?? null;
+	const workspaceChangesTruncated = workspaceChanges?.truncated ?? false;
+	const diffLazyScopeKey = `${currentProjectId ?? "__none__"}::${selection.card.id}::${selection.card.baseRef}::${diffMode}::${lastTurnViewKey ?? "__default__"}`;
+	const fetchDiffFileContent = useCallback(
+		async (path: string) => {
+			if (!currentProjectId) {
+				return null;
+			}
+			const trpc = getRuntimeTrpcClient(currentProjectId);
+			const response = await trpc.workspace.getChanges.query({
+				taskId: selection.card.id,
+				baseRef: selection.card.baseRef,
+				mode: diffMode,
+				path,
+			});
+			return response.files.find((file) => file.path === path) ?? null;
+		},
+		[currentProjectId, diffMode, selection.card.baseRef, selection.card.id],
+	);
+	const { contentByPath: diffContentByPath, requestFileContent: requestDiffFileContent } = useLazyDiffContent({
+		scopeKey: diffLazyScopeKey,
+		fetchFileContent: fetchDiffFileContent,
+	});
+	const runtimeFiles = workspaceChanges?.files
+		? mergeLazyFileContent(workspaceChanges.files, diffContentByPath)
+		: null;
 	const isWorkspaceChangesPending = isRuntimeAvailable && workspaceChanges === null;
 	const hasNoWorkspaceFileChanges =
 		isRuntimeAvailable && workspaceChanges !== null && runtimeFiles !== null && runtimeFiles.length === 0;
@@ -759,6 +785,8 @@ export function CardDetailView({
 										selectedPath={selectedPath}
 										onSelectedPathChange={setSelectedPath}
 										viewMode="unified"
+										truncated={workspaceChangesTruncated}
+										onRequestFileContent={requestDiffFileContent}
 										onAddToTerminal={
 											onAddReviewComments || showClineAgentChatPanel ? handleAddDiffComments : undefined
 										}
@@ -903,6 +931,8 @@ export function CardDetailView({
 													selectedPath={selectedPath}
 													onSelectedPathChange={setSelectedPath}
 													viewMode={isDiffExpanded ? "split" : "unified"}
+													truncated={workspaceChangesTruncated}
+													onRequestFileContent={requestDiffFileContent}
 													onAddToTerminal={
 														onAddReviewComments || showClineAgentChatPanel
 															? handleAddDiffComments

@@ -27,8 +27,16 @@ export const runtimeWorkspaceChangesRequestSchema = z.object({
 	taskId: z.string(),
 	baseRef: z.string(),
 	mode: z.enum(["working_copy", "last_turn"]).optional(),
+	/** When set, only this file's change (with content) is returned. */
+	path: z.string().optional(),
 });
 export type RuntimeWorkspaceChangesRequest = z.infer<typeof runtimeWorkspaceChangesRequestSchema>;
+
+export const runtimeWorkspaceChangesWorkspaceRequestSchema = z.object({
+	/** When set, only this file's change (with content) is returned. */
+	path: z.string().optional(),
+});
+export type RuntimeWorkspaceChangesWorkspaceRequest = z.infer<typeof runtimeWorkspaceChangesWorkspaceRequestSchema>;
 
 export const runtimeWorkspaceChangesModeSchema = z.enum(["working_copy", "last_turn"]);
 export type RuntimeWorkspaceChangesMode = z.infer<typeof runtimeWorkspaceChangesModeSchema>;
@@ -37,6 +45,12 @@ export const runtimeWorkspaceChangesResponseSchema = z.object({
 	repoRoot: z.string(),
 	generatedAt: z.number(),
 	files: z.array(runtimeWorkspaceFileChangeSchema),
+	/**
+	 * True when the changeset was too large to materialize every file's content
+	 * eagerly. `files` still lists all paths and +/- counts, but `oldText`/
+	 * `newText` are null and must be fetched per file (via the `path` request).
+	 */
+	truncated: z.boolean().optional(),
 });
 export type RuntimeWorkspaceChangesResponse = z.infer<typeof runtimeWorkspaceChangesResponseSchema>;
 

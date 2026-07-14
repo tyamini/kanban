@@ -6,9 +6,22 @@ import type {
 	RuntimeWorkspaceFileChange,
 	RuntimeWorkspaceFileStatus,
 } from "../core/api-contract";
+import { mapWithConcurrency } from "./concurrency";
 import { getGitStdout } from "./git-utils";
 
 const WORKSPACE_CHANGES_CACHE_MAX_ENTRIES = 128;
+
+/**
+ * Maximum number of changed files for which we eagerly materialize the full
+ * old/new text of every file. Above this, the response lists the files (path,
+ * status, +/- counts) but leaves `oldText`/`newText` null and sets
+ * `truncated: true`; per-file content is then loaded lazily on demand. This
+ * prevents a huge diff from fanning out into thousands of `git show` spawns.
+ */
+const MAX_MATERIALIZED_DIFF_FILES = 300;
+
+/** Upper bound on concurrent per-file git invocations while building a diff. */
+const GIT_DIFF_FILE_CONCURRENCY = 8;
 
 interface WorkspaceChangesCacheEntry {
 	stateKey: string;
@@ -16,7 +29,7 @@ interface WorkspaceChangesCacheEntry {
 	lastAccessedAt: number;
 }
 
-const workspaceChangesCacheByRepoRoot = new Map<string, WorkspaceChangesCacheEntry>();
+const workspaceChangesCache = new Map<string, WorkspaceChangesCacheEntry>();
 
 interface NameStatusEntry {
 	path: string;
@@ -35,6 +48,16 @@ interface ChangesFromRefInput {
 	fromRef: string;
 }
 
+/** Options shared by every changes query. */
+export interface WorkspaceChangesOptions {
+	/**
+	 * When set, only the file matching this repo-relative path is computed and
+	 * its content is always materialized (used for lazy per-file loading of a
+	 * truncated diff). Caching and the materialization cap are bypassed.
+	 */
+	onlyPath?: string;
+}
+
 interface DiffStat {
 	additions: number;
 	deletions: number;
@@ -45,6 +68,18 @@ interface FileFingerprint {
 	size: number | null;
 	mtimeMs: number | null;
 	ctimeMs: number | null;
+}
+
+/**
+ * Describes how to read the "before" and "after" side of a file for a specific
+ * kind of diff (working copy, ref..ref, ref..working-tree).
+ */
+interface MaterializeContext {
+	repoRoot: string;
+	/** `git` args (including trailing "--") for a batched `--numstat` call. */
+	numstatBaseArgs: string[];
+	readOldText: (entry: NameStatusEntry) => Promise<string | null>;
+	readNewText: (entry: NameStatusEntry) => Promise<string | null>;
 }
 
 function mapNameStatus(code: string): RuntimeWorkspaceFileStatus {
@@ -62,6 +97,14 @@ function toLineCount(text: string): number {
 		return 0;
 	}
 	return text.split("\n").length;
+}
+
+function oldTextApplies(entry: NameStatusEntry): boolean {
+	return entry.status !== "added" && entry.status !== "untracked";
+}
+
+function newTextApplies(entry: NameStatusEntry): boolean {
+	return entry.status !== "deleted";
 }
 
 function parseTrackedChanges(output: string): NameStatusEntry[] {
@@ -130,30 +173,17 @@ async function buildFileFingerprints(repoRoot: string, paths: string[]): Promise
 	return entries;
 }
 
-function buildWorkspaceChangesStateKey(input: {
-	repoRoot: string;
-	headCommit: string | null;
-	trackedChangesOutput: string;
-	untrackedOutput: string;
-	fingerprints: FileFingerprint[];
-}): string {
-	const fingerprintsToken = input.fingerprints
+function fingerprintsToken(fingerprints: FileFingerprint[]): string {
+	return fingerprints
 		.map((entry) => `${entry.path}\t${entry.size ?? "null"}\t${entry.mtimeMs ?? "null"}\t${entry.ctimeMs ?? "null"}`)
 		.join("\n");
-	return [
-		input.repoRoot,
-		input.headCommit ?? "no-head",
-		input.trackedChangesOutput,
-		input.untrackedOutput,
-		fingerprintsToken,
-	].join("\n--\n");
 }
 
 function pruneWorkspaceChangesCache(): void {
-	if (workspaceChangesCacheByRepoRoot.size <= WORKSPACE_CHANGES_CACHE_MAX_ENTRIES) {
+	if (workspaceChangesCache.size <= WORKSPACE_CHANGES_CACHE_MAX_ENTRIES) {
 		return;
 	}
-	const entries = Array.from(workspaceChangesCacheByRepoRoot.entries()).sort(
+	const entries = Array.from(workspaceChangesCache.entries()).sort(
 		(left, right) => left[1].lastAccessedAt - right[1].lastAccessedAt,
 	);
 	const removeCount = entries.length - WORKSPACE_CHANGES_CACHE_MAX_ENTRIES;
@@ -162,8 +192,26 @@ function pruneWorkspaceChangesCache(): void {
 		if (!candidate) {
 			break;
 		}
-		workspaceChangesCacheByRepoRoot.delete(candidate[0]);
+		workspaceChangesCache.delete(candidate[0]);
 	}
+}
+
+function readCachedChanges(scopeKey: string, stateKey: string): RuntimeWorkspaceChangesResponse | null {
+	const existing = workspaceChangesCache.get(scopeKey);
+	if (existing && existing.stateKey === stateKey) {
+		existing.lastAccessedAt = Date.now();
+		return existing.response;
+	}
+	return null;
+}
+
+function writeCachedChanges(scopeKey: string, stateKey: string, response: RuntimeWorkspaceChangesResponse): void {
+	workspaceChangesCache.set(scopeKey, {
+		stateKey,
+		response,
+		lastAccessedAt: Date.now(),
+	});
+	pruneWorkspaceChangesCache();
 }
 
 async function readHeadFile(repoRoot: string, path: string): Promise<string | null> {
@@ -209,146 +257,95 @@ function fallbackStats(oldText: string | null, newText: string | null): DiffStat
 	};
 }
 
-async function readDiffStat(repoRoot: string, path: string): Promise<DiffStat | null> {
+/**
+ * Run a single batched `git diff --numstat` and index the results by path.
+ * One git process replaces the previous one-numstat-per-file fan-out.
+ */
+async function readDiffStatsByPath(repoRoot: string, numstatArgs: string[]): Promise<Map<string, DiffStat>> {
+	const statsByPath = new Map<string, DiffStat>();
+	let output: string;
 	try {
-		const output = await getGitStdout(["diff", "--numstat", "HEAD", "--", path], repoRoot);
-		const firstLine = output
-			.split("\n")
-			.map((line) => line.trim())
-			.find(Boolean);
-		if (!firstLine) {
-			return null;
+		output = await getGitStdout(numstatArgs, repoRoot);
+	} catch {
+		return statsByPath;
+	}
+	for (const line of output.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			continue;
 		}
-		const [addedRaw, deletedRaw] = firstLine.split("\t");
+		const parts = trimmed.split("\t");
+		if (parts.length < 3) {
+			continue;
+		}
+		const [addedRaw, deletedRaw] = parts;
+		const path = parts.slice(2).join("\t");
+		if (!path) {
+			continue;
+		}
 		const additions = Number.parseInt(addedRaw ?? "", 10);
 		const deletions = Number.parseInt(deletedRaw ?? "", 10);
-		return {
+		statsByPath.set(path, {
 			additions: Number.isFinite(additions) ? additions : 0,
 			deletions: Number.isFinite(deletions) ? deletions : 0,
-		};
-	} catch {
-		return null;
+		});
 	}
+	return statsByPath;
 }
 
-async function readDiffStatBetweenRefs(
-	repoRoot: string,
-	fromRef: string,
-	toRef: string,
-	path: string,
-): Promise<DiffStat | null> {
-	try {
-		const output = await getGitStdout(["diff", "--numstat", fromRef, toRef, "--", path], repoRoot);
-		const firstLine = output
-			.split("\n")
-			.map((line) => line.trim())
-			.find(Boolean);
-		if (!firstLine) {
-			return null;
-		}
-		const [addedRaw, deletedRaw] = firstLine.split("\t");
-		const additions = Number.parseInt(addedRaw ?? "", 10);
-		const deletions = Number.parseInt(deletedRaw ?? "", 10);
-		return {
-			additions: Number.isFinite(additions) ? additions : 0,
-			deletions: Number.isFinite(deletions) ? deletions : 0,
-		};
-	} catch {
-		return null;
-	}
-}
-
-async function readDiffStatFromRef(repoRoot: string, fromRef: string, path: string): Promise<DiffStat | null> {
-	try {
-		const output = await getGitStdout(["diff", "--numstat", fromRef, "--", path], repoRoot);
-		const firstLine = output
-			.split("\n")
-			.map((line) => line.trim())
-			.find(Boolean);
-		if (!firstLine) {
-			return null;
-		}
-		const [addedRaw, deletedRaw] = firstLine.split("\t");
-		const additions = Number.parseInt(addedRaw ?? "", 10);
-		const deletions = Number.parseInt(deletedRaw ?? "", 10);
-		return {
-			additions: Number.isFinite(additions) ? additions : 0,
-			deletions: Number.isFinite(deletions) ? deletions : 0,
-		};
-	} catch {
-		return null;
-	}
-}
-
-async function buildFileChange(repoRoot: string, entry: NameStatusEntry): Promise<RuntimeWorkspaceFileChange> {
-	const basePath = entry.previousPath ?? entry.path;
-	const oldText =
-		entry.status === "added" || entry.status === "untracked" ? null : await readHeadFile(repoRoot, basePath);
-	const newText = entry.status === "deleted" ? null : await readWorkingTreeFile(repoRoot, entry.path);
-	const stats =
-		entry.status === "untracked"
-			? { additions: toLineCount(newText ?? ""), deletions: 0 }
-			: ((await readDiffStat(repoRoot, entry.path)) ?? fallbackStats(oldText, newText));
-
-	return {
-		path: entry.path,
-		previousPath: entry.previousPath,
-		status: entry.status,
-		additions: stats.additions,
-		deletions: stats.deletions,
-		oldText,
-		newText,
-	};
-}
-
-async function buildFileChangeBetweenRefs(
-	repoRoot: string,
+function resolveStats(
 	entry: NameStatusEntry,
-	fromRef: string,
-	toRef: string,
-): Promise<RuntimeWorkspaceFileChange> {
-	const basePath = entry.previousPath ?? entry.path;
-	const oldText = entry.status === "added" ? null : await readFileAtRef(repoRoot, fromRef, basePath);
-	const newText = entry.status === "deleted" ? null : await readFileAtRef(repoRoot, toRef, entry.path);
-	const stats =
-		(await readDiffStatBetweenRefs(repoRoot, fromRef, toRef, entry.path)) ?? fallbackStats(oldText, newText);
-
-	return {
-		path: entry.path,
-		previousPath: entry.previousPath,
-		status: entry.status,
-		additions: stats.additions,
-		deletions: stats.deletions,
-		oldText,
-		newText,
-	};
+	statsByPath: Map<string, DiffStat>,
+	oldText: string | null,
+	newText: string | null,
+): DiffStat {
+	if (entry.status === "untracked") {
+		return { additions: toLineCount(newText ?? ""), deletions: 0 };
+	}
+	const fromNumstat = statsByPath.get(entry.path);
+	if (fromNumstat) {
+		return fromNumstat;
+	}
+	return fallbackStats(oldText, newText);
 }
 
-async function buildFileChangeFromRef(
-	repoRoot: string,
-	entry: NameStatusEntry,
-	fromRef: string,
-): Promise<RuntimeWorkspaceFileChange> {
-	const basePath = entry.previousPath ?? entry.path;
-	const oldText =
-		entry.status === "added" || entry.status === "untracked"
-			? null
-			: await readFileAtRef(repoRoot, fromRef, basePath);
-	const newText = entry.status === "deleted" ? null : await readWorkingTreeFile(repoRoot, entry.path);
-	const stats =
-		entry.status === "untracked"
-			? { additions: toLineCount(newText ?? ""), deletions: 0 }
-			: ((await readDiffStatFromRef(repoRoot, fromRef, entry.path)) ?? fallbackStats(oldText, newText));
+/**
+ * Build the file-change list for a set of changed entries with bounded git
+ * concurrency. When the changeset is larger than the materialization cap (and a
+ * specific file was not requested), file text is left null and `truncated` is
+ * set so the client can lazily fetch content per file.
+ */
+async function materializeChanges(
+	allChanges: NameStatusEntry[],
+	context: MaterializeContext,
+	options: WorkspaceChangesOptions,
+): Promise<{ files: RuntimeWorkspaceFileChange[]; truncated: boolean }> {
+	const targetChanges =
+		options.onlyPath !== undefined ? allChanges.filter((entry) => entry.path === options.onlyPath) : allChanges;
 
-	return {
-		path: entry.path,
-		previousPath: entry.previousPath,
-		status: entry.status,
-		additions: stats.additions,
-		deletions: stats.deletions,
-		oldText,
-		newText,
-	};
+	const materializeContent = options.onlyPath !== undefined || targetChanges.length <= MAX_MATERIALIZED_DIFF_FILES;
+	const truncated = options.onlyPath === undefined && !materializeContent;
+
+	const numstatArgs =
+		options.onlyPath !== undefined ? [...context.numstatBaseArgs, options.onlyPath] : context.numstatBaseArgs;
+	const statsByPath = await readDiffStatsByPath(context.repoRoot, numstatArgs);
+
+	const files = await mapWithConcurrency(targetChanges, GIT_DIFF_FILE_CONCURRENCY, async (entry) => {
+		const oldText = materializeContent && oldTextApplies(entry) ? await context.readOldText(entry) : null;
+		const newText = materializeContent && newTextApplies(entry) ? await context.readNewText(entry) : null;
+		const stats = resolveStats(entry, statsByPath, oldText, newText);
+		return {
+			path: entry.path,
+			previousPath: entry.previousPath,
+			status: entry.status,
+			additions: stats.additions,
+			deletions: stats.deletions,
+			oldText,
+			newText,
+		} satisfies RuntimeWorkspaceFileChange;
+	});
+	files.sort((left, right) => left.path.localeCompare(right.path));
+	return { files, truncated };
 }
 
 export async function createEmptyWorkspaceChangesResponse(cwd: string): Promise<RuntimeWorkspaceChangesResponse> {
@@ -360,10 +357,14 @@ export async function createEmptyWorkspaceChangesResponse(cwd: string): Promise<
 		repoRoot,
 		generatedAt: Date.now(),
 		files: [],
+		truncated: false,
 	};
 }
 
-export async function getWorkspaceChanges(cwd: string): Promise<RuntimeWorkspaceChangesResponse> {
+export async function getWorkspaceChanges(
+	cwd: string,
+	options: WorkspaceChangesOptions = {},
+): Promise<RuntimeWorkspaceChangesResponse> {
 	const repoRoot = (await getGitStdout(["rev-parse", "--show-toplevel"], cwd)).trim();
 	if (!repoRoot) {
 		throw new Error("Could not resolve git repository root.");
@@ -392,37 +393,47 @@ export async function getWorkspaceChanges(cwd: string): Promise<RuntimeWorkspace
 	];
 	const fingerprintPaths = allChanges.flatMap((entry) => [entry.path, entry.previousPath].filter(Boolean) as string[]);
 	const fingerprints = await buildFileFingerprints(repoRoot, fingerprintPaths);
-	const stateKey = buildWorkspaceChangesStateKey({
+	const scopeKey = repoRoot;
+	const stateKey = [
 		repoRoot,
-		headCommit: headCommitOutput.trim() || null,
+		headCommitOutput.trim() || "no-head",
 		trackedChangesOutput,
 		untrackedOutput,
-		fingerprints,
-	});
-	const existing = workspaceChangesCacheByRepoRoot.get(repoRoot);
-	if (existing && existing.stateKey === stateKey) {
-		existing.lastAccessedAt = Date.now();
-		return existing.response;
+		fingerprintsToken(fingerprints),
+	].join("\n--\n");
+
+	if (options.onlyPath === undefined) {
+		const cached = readCachedChanges(scopeKey, stateKey);
+		if (cached) {
+			return cached;
+		}
 	}
 
-	const files = await Promise.all(allChanges.map((entry) => buildFileChange(repoRoot, entry)));
-	files.sort((left, right) => left.path.localeCompare(right.path));
+	const { files, truncated } = await materializeChanges(
+		allChanges,
+		{
+			repoRoot,
+			numstatBaseArgs: ["diff", "--numstat", "HEAD", "--"],
+			readOldText: (entry) => readHeadFile(repoRoot, entry.previousPath ?? entry.path),
+			readNewText: (entry) => readWorkingTreeFile(repoRoot, entry.path),
+		},
+		options,
+	);
 	const response: RuntimeWorkspaceChangesResponse = {
 		repoRoot,
 		generatedAt: Date.now(),
 		files,
+		truncated,
 	};
-	workspaceChangesCacheByRepoRoot.set(repoRoot, {
-		stateKey,
-		response,
-		lastAccessedAt: Date.now(),
-	});
-	pruneWorkspaceChangesCache();
+	if (options.onlyPath === undefined) {
+		writeCachedChanges(scopeKey, stateKey, response);
+	}
 	return response;
 }
 
 export async function getWorkspaceChangesBetweenRefs(
 	input: ChangesBetweenRefsInput,
+	options: WorkspaceChangesOptions = {},
 ): Promise<RuntimeWorkspaceChangesResponse> {
 	const repoRoot = (await getGitStdout(["rev-parse", "--show-toplevel"], input.cwd)).trim();
 	if (!repoRoot) {
@@ -439,22 +450,45 @@ export async function getWorkspaceChangesBetweenRefs(
 			repoRoot,
 			generatedAt: Date.now(),
 			files: [],
+			truncated: false,
 		};
 	}
 
-	const files = await Promise.all(
-		trackedChanges.map((entry) => buildFileChangeBetweenRefs(repoRoot, entry, input.fromRef, input.toRef)),
-	);
-	files.sort((left, right) => left.path.localeCompare(right.path));
+	const scopeKey = `${repoRoot}\n--between--\n${input.fromRef}\n${input.toRef}`;
+	const stateKey = trackedChangesOutput;
+	if (options.onlyPath === undefined) {
+		const cached = readCachedChanges(scopeKey, stateKey);
+		if (cached) {
+			return cached;
+		}
+	}
 
-	return {
+	const { files, truncated } = await materializeChanges(
+		trackedChanges,
+		{
+			repoRoot,
+			numstatBaseArgs: ["diff", "--numstat", input.fromRef, input.toRef, "--"],
+			readOldText: (entry) => readFileAtRef(repoRoot, input.fromRef, entry.previousPath ?? entry.path),
+			readNewText: (entry) => readFileAtRef(repoRoot, input.toRef, entry.path),
+		},
+		options,
+	);
+	const response: RuntimeWorkspaceChangesResponse = {
 		repoRoot,
 		generatedAt: Date.now(),
 		files,
+		truncated,
 	};
+	if (options.onlyPath === undefined) {
+		writeCachedChanges(scopeKey, stateKey, response);
+	}
+	return response;
 }
 
-export async function getWorkspaceChangesFromRef(input: ChangesFromRefInput): Promise<RuntimeWorkspaceChangesResponse> {
+export async function getWorkspaceChangesFromRef(
+	input: ChangesFromRefInput,
+	options: WorkspaceChangesOptions = {},
+): Promise<RuntimeWorkspaceChangesResponse> {
 	const repoRoot = (await getGitStdout(["rev-parse", "--show-toplevel"], input.cwd)).trim();
 	if (!repoRoot) {
 		throw new Error("Could not resolve git repository root.");
@@ -485,14 +519,41 @@ export async function getWorkspaceChangesFromRef(input: ChangesFromRefInput): Pr
 			repoRoot,
 			generatedAt: Date.now(),
 			files: [],
+			truncated: false,
 		};
 	}
 
-	const files = await Promise.all(allChanges.map((entry) => buildFileChangeFromRef(repoRoot, entry, input.fromRef)));
-	files.sort((left, right) => left.path.localeCompare(right.path));
-	return {
+	const fingerprintPaths = allChanges.flatMap((entry) => [entry.path, entry.previousPath].filter(Boolean) as string[]);
+	const fingerprints = await buildFileFingerprints(repoRoot, fingerprintPaths);
+	const scopeKey = `${repoRoot}\n--fromref--\n${input.fromRef}`;
+	const stateKey = [input.fromRef, trackedChangesOutput, untrackedOutput, fingerprintsToken(fingerprints)].join(
+		"\n--\n",
+	);
+	if (options.onlyPath === undefined) {
+		const cached = readCachedChanges(scopeKey, stateKey);
+		if (cached) {
+			return cached;
+		}
+	}
+
+	const { files, truncated } = await materializeChanges(
+		allChanges,
+		{
+			repoRoot,
+			numstatBaseArgs: ["diff", "--numstat", input.fromRef, "--"],
+			readOldText: (entry) => readFileAtRef(repoRoot, input.fromRef, entry.previousPath ?? entry.path),
+			readNewText: (entry) => readWorkingTreeFile(repoRoot, entry.path),
+		},
+		options,
+	);
+	const response: RuntimeWorkspaceChangesResponse = {
 		repoRoot,
 		generatedAt: Date.now(),
 		files,
+		truncated,
 	};
+	if (options.onlyPath === undefined) {
+		writeCachedChanges(scopeKey, stateKey, response);
+	}
+	return response;
 }
