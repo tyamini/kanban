@@ -309,6 +309,14 @@ async function createHubSourceTarball(sourceRoot: string): Promise<string> {
 		"--exclude=./web-ui/node_modules",
 		"--exclude=./web-ui/dist",
 		"--exclude=./packages/desktop/node_modules",
+		// `.claude` holds hub-local Claude Code dev tooling whose skill entries are
+		// absolute symlinks into the hub's own checkout (e.g. kanban-task-done ->
+		// /home/<user>/kanban-src/skills/...). Those are dangling on the remote and
+		// serve no purpose there. Worse, when such a path changes type between builds
+		// (a real directory on an earlier ship, a symlink now), extracting over the
+		// stale copy fails with "Cannot open: File exists" and breaks reconnection,
+		// since tar refuses to replace a directory with a symlink. Never ship it.
+		"--exclude=./.claude",
 		".",
 	]);
 	return tarballPath;

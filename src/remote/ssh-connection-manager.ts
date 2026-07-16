@@ -252,6 +252,11 @@ export function createSshConnection(options: SshConnectionOptions): SshConnectio
 					return;
 				}
 				sftp.fastPut(localPath, remotePath, (putError) => {
+					// Close this SFTP channel so it doesn't count against the
+					// server's per-connection MaxSessions limit. Leaking it made
+					// later channel opens fail with "Channel open failure: open
+					// failed" once enough uploads accumulated on one connection.
+					sftp.end();
 					if (putError) {
 						rejectUpload(putError);
 						return;
