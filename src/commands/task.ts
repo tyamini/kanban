@@ -8,6 +8,8 @@ import type {
 	RuntimeBoardDependency,
 	RuntimeClineReasoningEffort,
 	RuntimeTaskClineSettings,
+	RuntimeTaskHandoff,
+	RuntimeTaskSessionSummary,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdSchema, runtimeClineReasoningEffortSchema } from "../core/api-contract";
@@ -17,14 +19,19 @@ import {
 	addTaskToColumn,
 	deleteTasksFromBoard,
 	getTaskColumnId,
+	moveTaskToColumn,
 	type RuntimeAddTaskDependencyResult,
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
+	updateTaskDependencyHandoff,
 } from "../core/task-board-mutations";
+import { getUpstreamSummaryText, resolveHandoffPrompt } from "../core/task-handoff";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeAppRouter } from "../trpc/app-router";
+import { resolveClaudeFinalMessageForCwd } from "./hook-events/claude-hook-events";
+import { resolveCodexRolloutFinalMessageForCwd } from "./hook-events/codex-hook-events";
 
 const LIST_TASK_COLUMNS = ["backlog", "in_progress", "review", "trash"] as const;
 type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
@@ -79,6 +86,16 @@ function parseAutoReviewMode(value: string | undefined): "commit" | "pr" | "done
 		return value;
 	}
 	throw new Error(`Invalid auto review mode "${value}". Expected: commit, pr, done.`);
+}
+
+function parseHandoffMode(value: string | undefined): "summary" | "template" | "none" | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value === "summary" || value === "template" || value === "none") {
+		return value;
+	}
+	throw new Error(`Invalid handoff mode "${value}". Expected: none, summary, template.`);
 }
 
 const VALID_AGENT_IDS = runtimeAgentIdSchema.options;
@@ -611,6 +628,7 @@ async function linkTasks(input: {
 	taskId: string;
 	linkedTaskId: string;
 	projectPath?: string;
+	handoff?: "summary" | "template" | "none";
 }): Promise<JsonRecord> {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
@@ -621,13 +639,23 @@ async function linkTasks(input: {
 			throw new Error(getLinkFailureMessage(linked.reason));
 		}
 
+		let board = linked.board;
+		let dependencyRecord = linked.dependency;
+		if (input.handoff !== undefined) {
+			const withHandoff = updateTaskDependencyHandoff(board, linked.dependency.id, { mode: input.handoff });
+			if (withHandoff.updated) {
+				board = withHandoff.board;
+				dependencyRecord = { ...dependencyRecord, handoff: { mode: input.handoff } };
+			}
+		}
+
 		const nextState: RuntimeWorkspaceStateResponse = {
 			...runtimeState,
-			board: linked.board,
+			board,
 		};
 		return {
-			board: linked.board,
-			value: formatDependencyRecord(nextState, linked.dependency),
+			board,
+			value: formatDependencyRecord(nextState, dependencyRecord),
 		};
 	});
 	return {
@@ -669,7 +697,12 @@ async function unlinkTasks(input: { cwd: string; dependencyId: string; projectPa
 	};
 }
 
-async function startTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
+async function startTask(input: {
+	cwd: string;
+	taskId: string;
+	projectPath?: string;
+	promptOverride?: string;
+}): Promise<JsonRecord> {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
@@ -678,7 +711,10 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 	// the agent session, and move the card to in_progress in a single call. This
 	// removes the historical multi-RPC "start dance" that could orphan a card if
 	// the caller disconnected mid-sequence.
-	const started = await runtimeClient.runtime.startTask.mutate({ taskId: input.taskId });
+	const started = await runtimeClient.runtime.startTask.mutate({
+		taskId: input.taskId,
+		...(input.promptOverride !== undefined ? { promptOverride: input.promptOverride } : {}),
+	});
 	if (!started.ok) {
 		throw new Error(started.error ?? `Task "${input.taskId}" could not be started.`);
 	}
@@ -716,11 +752,88 @@ interface TrashTaskExecutionResult {
 	alreadyInTrash: boolean;
 }
 
+interface HandoffDownstream {
+	taskId: string;
+	card: RuntimeBoardCard;
+	handoff: RuntimeTaskHandoff | undefined;
+}
+
+// Everything needed to resolve upstream->downstream handoff prompts AFTER the
+// (synchronous) trash mutation, once we can asynchronously recover the upstream
+// final message from its transcript if the persisted summary doesn't have one.
+interface HandoffContext {
+	upstreamCard: RuntimeBoardCard;
+	upstreamSummary: RuntimeTaskSessionSummary | undefined;
+	upstreamAgentId: RuntimeAgentId | null;
+	downstreams: HandoffDownstream[];
+}
+
 interface TrashTaskMutationValue {
 	task: JsonRecord;
 	previousColumnId: ListTaskColumn;
 	readyTaskIds: string[];
+	handoffContext: HandoffContext | null;
 	alreadyInTrash: boolean;
+}
+
+// Recover a task's final assistant message from its agent transcript. Used when
+// a task self-completes mid-turn via `kanban task done` (kanban-task-done skill):
+// no Stop/to_review hook has fired, so the persisted session summary carries no
+// `finalMessage` for a downstream summary handoff to pick up. `cwd` is the task's
+// worktree (the skill runs the CLI from there). Returns null on any failure so
+// callers cleanly fall back to no handoff context.
+async function resolveAgentFinalMessageFromCwd(cwd: string, agentId: RuntimeAgentId | null): Promise<string | null> {
+	try {
+		if (agentId === "codex") {
+			return await resolveCodexRolloutFinalMessageForCwd(cwd);
+		}
+		// Claude is the default agent; also the only PTY agent that stores
+		// per-cwd transcripts we can recover here.
+		return await resolveClaudeFinalMessageForCwd(cwd);
+	} catch {
+		return null;
+	}
+}
+
+// Build the effective downstream prompt overrides, recovering the upstream final
+// message from its transcript when the persisted summary lacks one.
+async function resolveHandoffPromptOverrides(context: HandoffContext, cwd: string): Promise<Record<string, string>> {
+	const overrides: Record<string, string> = {};
+	if (context.downstreams.length === 0) {
+		return overrides;
+	}
+	let effectiveSummary = context.upstreamSummary;
+	if (!getUpstreamSummaryText(effectiveSummary)) {
+		const recovered = await resolveAgentFinalMessageFromCwd(cwd, context.upstreamAgentId);
+		if (recovered) {
+			const baseActivity = effectiveSummary?.latestHookActivity ?? {
+				activityText: null,
+				toolName: null,
+				toolInputSummary: null,
+				finalMessage: null,
+				hookEventName: null,
+				notificationType: null,
+				source: null,
+			};
+			effectiveSummary = {
+				...(effectiveSummary ?? {}),
+				latestHookActivity: { ...baseActivity, finalMessage: recovered },
+			} as RuntimeTaskSessionSummary;
+		}
+	}
+	for (const downstream of context.downstreams) {
+		const resolvedPrompt = resolveHandoffPrompt({
+			downstream: downstream.card,
+			upstream: context.upstreamCard,
+			handoff: downstream.handoff,
+			upstreamSummary: effectiveSummary,
+			upstreamWorkspace: null,
+		});
+		if (resolvedPrompt !== downstream.card.prompt.trim()) {
+			overrides[downstream.taskId] = resolvedPrompt;
+		}
+	}
+	return overrides;
 }
 
 function columnCanHaveLiveTaskSession(columnId: ListTaskColumn): boolean {
@@ -746,15 +859,48 @@ async function trashTaskById(input: {
 					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId),
 					previousColumnId: latestRecord.columnId,
 					readyTaskIds: [] as string[],
+					handoffContext: null,
 					alreadyInTrash: true,
 				},
 				save: false,
 			};
 		}
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(latestState.board, input.taskId);
+		// `kanban task done --task-id` is an explicit completion signal. The
+		// kanban-task-done skill fires it from inside a still-live task session, so
+		// the card is in `in_progress` at this point. Route it through the normal
+		// completion path (in_progress -> review -> done) so linked backlog waiters
+		// are unlocked and auto-started, rather than special-casing the state
+		// machine. Trashing straight from `in_progress` stays a cancel (no links).
+		let boardForTrash = latestState.board;
+		if (latestRecord.columnId === "in_progress") {
+			const movedToReview = moveTaskToColumn(boardForTrash, input.taskId, "review");
+			if (movedToReview.moved) {
+				boardForTrash = movedToReview.board;
+			}
+		}
+
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(boardForTrash, input.taskId);
 		if (!trashed.moved || !trashed.task) {
 			throw new Error(`Task "${input.taskId}" could not be moved to done.`);
+		}
+
+		// Capture everything needed to resolve upstream->downstream handoff for each
+		// unlocked task. The prompt is resolved AFTER this synchronous mutation so we
+		// can asynchronously recover the upstream final message from its transcript
+		// when the persisted summary doesn't have one yet (mid-turn self-completion).
+		// Mirrors the orchestrator's `moveTaskToDoneAndChain`.
+		const upstreamSummary = latestState.sessions[input.taskId];
+		const downstreams: HandoffDownstream[] = [];
+		for (const readyTaskId of trashed.readyTaskIds) {
+			const downstream = findTaskRecord(latestState, readyTaskId)?.task;
+			if (!downstream) {
+				continue;
+			}
+			const dependency = latestState.board.dependencies.find(
+				(dep) => dep.fromTaskId === readyTaskId && dep.toTaskId === input.taskId,
+			);
+			downstreams.push({ taskId: readyTaskId, card: downstream, handoff: dependency?.handoff });
 		}
 
 		const nextState: RuntimeWorkspaceStateResponse = {
@@ -767,6 +913,12 @@ async function trashTaskById(input: {
 				task: formatTaskRecord(nextState, trashed.task, "trash"),
 				previousColumnId: latestRecord.columnId,
 				readyTaskIds: trashed.readyTaskIds,
+				handoffContext: {
+					upstreamCard: latestRecord.task,
+					upstreamSummary,
+					upstreamAgentId: upstreamSummary?.agentId ?? latestRecord.task.agentId ?? null,
+					downstreams,
+				},
 				alreadyInTrash: false,
 			},
 		};
@@ -792,12 +944,17 @@ async function trashTaskById(input: {
 		await stopTaskRuntimeSession(input.runtimeClient, input.taskId);
 	}
 
+	const handoffPromptByTaskId = mutation.value.handoffContext
+		? await resolveHandoffPromptOverrides(mutation.value.handoffContext, input.cwd)
+		: {};
+
 	const autoStartedTasks: JsonRecord[] = [];
 	for (const readyTaskId of mutation.value.readyTaskIds) {
 		const started = await startTask({
 			cwd: input.cwd,
 			taskId: readyTaskId,
 			projectPath: input.projectPath,
+			promptOverride: handoffPromptByTaskId[readyTaskId],
 		});
 		autoStartedTasks.push(started);
 	}
@@ -1231,6 +1388,10 @@ export function registerTaskCommand(program: Command): void {
 		.requiredOption("--task-id <id>", "One of the two task IDs to link.")
 		.requiredOption("--linked-task-id <id>", "The other task ID to link.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.option(
+			"--handoff <mode>",
+			"Context handoff from the prerequisite into the waiting task: none | summary | template.",
+		)
 		.addHelpText(
 			"after",
 			[
@@ -1246,7 +1407,7 @@ export function registerTaskCommand(program: Command): void {
 				"",
 			].join("\n"),
 		)
-		.action(async (options: { taskId: string; linkedTaskId: string; projectPath?: string }) => {
+		.action(async (options: { taskId: string; linkedTaskId: string; projectPath?: string; handoff?: string }) => {
 			await runTaskCommand(
 				async () =>
 					await linkTasks({
@@ -1254,6 +1415,7 @@ export function registerTaskCommand(program: Command): void {
 						taskId: options.taskId,
 						linkedTaskId: options.linkedTaskId,
 						projectPath: options.projectPath,
+						handoff: parseHandoffMode(options.handoff),
 					}),
 			);
 		});

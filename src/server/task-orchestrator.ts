@@ -20,10 +20,10 @@ import type {
 	RuntimeBoardData,
 	RuntimeConfigResponse,
 	RuntimeTaskAutoReviewMode,
-	RuntimeTaskHandoff,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
 import { getTaskColumnId, moveTaskToColumn, trashTaskAndGetReadyLinkedTaskIds } from "../core/task-board-mutations";
+import { resolveHandoffPrompt, type UpstreamWorkspaceSnapshot } from "../core/task-handoff";
 import { mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeTrpcContext, RuntimeTrpcWorkspaceScope } from "../trpc/app-router";
 import { findBoardCard, type StartTaskOnRuntimeDeps, startTaskOnRuntime } from "./task-start";
@@ -60,13 +60,6 @@ function resolveAutoReviewMode(mode: RuntimeTaskAutoReviewMode | null | undefine
 		return mode;
 	}
 	return "commit";
-}
-
-function resolveHandoffMode(mode: RuntimeTaskHandoff["mode"] | null | undefined): RuntimeTaskHandoff["mode"] {
-	if (mode === "summary" || mode === "template") {
-		return mode;
-	}
-	return "none";
 }
 
 function isActiveTaskSessionState(summary: RuntimeTaskSessionSummary | null): boolean {
@@ -140,70 +133,6 @@ function interpolateTemplate(template: string, variables: Record<string, string>
 		result = result.replaceAll(`{{${key}}}`, value);
 	}
 	return result;
-}
-
-const PR_URL_PATTERN = /https?:\/\/github\.com\/[^\s)]+\/pull\/\d+/i;
-
-function extractPrUrl(text: string | null | undefined): string {
-	if (!text) {
-		return "";
-	}
-	const match = text.match(PR_URL_PATTERN);
-	return match ? match[0] : "";
-}
-
-interface UpstreamWorkspaceSnapshot {
-	branch: string | null;
-	headCommit: string | null;
-	changedFiles: number | null;
-}
-
-function buildHandoffVariables(
-	upstream: RuntimeBoardCard,
-	summary: RuntimeTaskSessionSummary | undefined,
-	workspace: UpstreamWorkspaceSnapshot | null,
-): Record<string, string> {
-	const summaryText = summary?.latestHookActivity?.finalMessage?.trim() ?? "";
-	return {
-		"from.title": upstream.title ?? "",
-		"from.summary": summaryText,
-		"from.branch": workspace?.branch ?? "",
-		"from.head_commit": workspace?.headCommit ?? "",
-		"from.pr_url": extractPrUrl(summaryText),
-		"from.changed_files": workspace?.changedFiles != null ? String(workspace.changedFiles) : "",
-	};
-}
-
-// Compute the prompt a downstream task should run with, injecting upstream
-// handoff context. Returns the downstream's own prompt when handoff is disabled.
-function resolveHandoffPrompt(input: {
-	downstream: RuntimeBoardCard;
-	upstream: RuntimeBoardCard;
-	handoff: RuntimeTaskHandoff | undefined;
-	upstreamSummary: RuntimeTaskSessionSummary | undefined;
-	upstreamWorkspace: UpstreamWorkspaceSnapshot | null;
-}): string {
-	const basePrompt = input.downstream.prompt.trim();
-	const mode = resolveHandoffMode(input.handoff?.mode);
-	if (mode === "none") {
-		return basePrompt;
-	}
-	if (mode === "template") {
-		const template = input.handoff?.template?.trim();
-		if (!template) {
-			return basePrompt;
-		}
-		return interpolateTemplate(
-			template,
-			buildHandoffVariables(input.upstream, input.upstreamSummary, input.upstreamWorkspace),
-		);
-	}
-	const summaryText = input.upstreamSummary?.latestHookActivity?.finalMessage?.trim() ?? "";
-	if (!summaryText) {
-		return basePrompt;
-	}
-	const block = `## Context from upstream task "${input.upstream.title ?? ""}"\n${summaryText}`;
-	return basePrompt ? `${block}\n\n---\n\n${basePrompt}` : block;
 }
 
 function buildGitActionPrompt(
@@ -444,11 +373,14 @@ export function createTaskOrchestrator(deps: CreateTaskOrchestratorDependencies)
 				}
 				continue;
 			}
-			if (mode === "commit" && changedFiles === 0) {
+			// A clean working tree means the git action (commit or PR) has nothing
+			// left to do: either it already ran and completed, or there was never
+			// anything to commit/PR. Move to done for BOTH modes. This also recovers
+			// a card whose in-memory `armed` flag was lost (hub restart / remote
+			// reconnect) after its PR was opened — otherwise a `pr` card with a clean
+			// tree would fall through below and stay stuck in review forever.
+			if (changedFiles === 0) {
 				await moveTaskToDoneAndChain(scope, card.id);
-				continue;
-			}
-			if (changedFiles <= 0) {
 				continue;
 			}
 			armedMap.set(card.id, mode);

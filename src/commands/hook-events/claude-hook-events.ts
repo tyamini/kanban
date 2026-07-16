@@ -1,4 +1,6 @@
-import { open, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type { RuntimeHookEvent, RuntimeTaskHookActivity } from "../../core/api-contract";
 import { asRecord, normalizeWhitespace, readStringField } from "./hook-utils";
@@ -93,6 +95,52 @@ async function readFileTail(filePath: string, maxBytes: number): Promise<string 
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Claude Code stores per-project transcripts under
+ * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, where the directory name
+ * is the working directory with `/` and `.` replaced by `-`. Given a working
+ * directory (e.g. a task worktree), find the newest transcript and read the last
+ * assistant message from it.
+ *
+ * This is the fallback used to recover a task's final message when it completes
+ * itself mid-turn via `kanban task done` (the kanban-task-done skill): at that
+ * moment no Stop/to_review hook has fired yet, so the persisted session summary
+ * has no `finalMessage` for the downstream handoff to pick up.
+ */
+export async function resolveClaudeFinalMessageForCwd(cwd: string): Promise<string | null> {
+	const normalizedCwd = cwd.trim();
+	if (!normalizedCwd) {
+		return null;
+	}
+	const encoded = normalizedCwd.replace(/[/.]/g, "-");
+	const projectDir = join(homedir(), ".claude", "projects", encoded);
+	let entries: string[];
+	try {
+		entries = (await readdir(projectDir)).filter((name) => name.endsWith(".jsonl"));
+	} catch {
+		return null;
+	}
+	if (entries.length === 0) {
+		return null;
+	}
+	const withMtime = await Promise.all(
+		entries.map(async (name) => {
+			const filePath = join(projectDir, name);
+			try {
+				return { filePath, mtimeMs: (await stat(filePath)).mtimeMs };
+			} catch {
+				return { filePath, mtimeMs: 0 };
+			}
+		}),
+	);
+	withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	const transcriptTail = await readFileTail(withMtime[0].filePath, CLAUDE_TRANSCRIPT_TAIL_SCAN_BYTES);
+	if (!transcriptTail) {
+		return null;
+	}
+	return resolveClaudeFinalMessageFromTranscriptText(transcriptTail);
 }
 
 async function resolveClaudeReviewFinalMessageFromPayload(

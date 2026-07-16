@@ -265,6 +265,57 @@ describe.sequential("task-orchestrator integration", () => {
 		expect(columnOf(await harness.readBoard(), "T")).toBe("trash");
 	});
 
+	it("auto-review pr mode sends a PR prompt while changes exist, then moves to done when clean", async () => {
+		const workspacePath = join(sandbox.path, "proj");
+		mkdirSync(workspacePath, { recursive: true });
+		initGitRepository(workspacePath);
+
+		const board = boardWith({
+			review: [card("T", { autoReviewEnabled: true, autoReviewMode: "pr", agentId: "cline" })],
+		});
+		const harness = await createHarness(workspacePath, board);
+		harness.fakeSessions.T = summary("T", { state: "awaiting_review", agentId: "cline", reviewReason: "hook" });
+		harness.changedFilesByTaskId.T = 2;
+
+		harness.orchestrator.notifyWorkspaceActivity(harness.scope.workspaceId);
+		await harness.orchestrator.waitForIdle(harness.scope.workspaceId);
+
+		expect(harness.chatCalls.some((c) => c.taskId === "T" && c.text.includes("Open a PR against main"))).toBe(true);
+		expect(columnOf(await harness.readBoard(), "T")).toBe("review");
+
+		// Agent opened the PR and committed everything: working tree is now clean.
+		harness.changedFilesByTaskId.T = 0;
+		harness.orchestrator.notifyWorkspaceActivity(harness.scope.workspaceId);
+		await harness.orchestrator.waitForIdle(harness.scope.workspaceId);
+
+		expect(columnOf(await harness.readBoard(), "T")).toBe("trash");
+	});
+
+	it("auto-review pr mode moves to done when the tree is already clean (armed flag lost / PR done before reconcile)", async () => {
+		// Reproduces the "did the PR but stuck in review" bug: the in-memory armed
+		// flag is lost (hub restart / remote reconnect) after the PR was opened, so
+		// the pr card re-reaches reconcile with a clean tree and no armed state. It
+		// must still move to done rather than being stuck in review forever.
+		const workspacePath = join(sandbox.path, "proj");
+		mkdirSync(workspacePath, { recursive: true });
+		initGitRepository(workspacePath);
+
+		const board = boardWith({
+			review: [card("T", { autoReviewEnabled: true, autoReviewMode: "pr" })],
+		});
+		const harness = await createHarness(workspacePath, board);
+		harness.fakeSessions.T = summary("T", { state: "awaiting_review", reviewReason: "hook" });
+		harness.changedFilesByTaskId.T = 0;
+
+		harness.orchestrator.notifyWorkspaceActivity(harness.scope.workspaceId);
+		await harness.orchestrator.waitForIdle(harness.scope.workspaceId);
+
+		// No PR prompt should be sent (nothing to commit/push), and the card must
+		// not linger in review.
+		expect(harness.inputCalls.some((c) => c.taskId === "T")).toBe(false);
+		expect(columnOf(await harness.readBoard(), "T")).toBe("trash");
+	});
+
 	it("recovers an orphaned in_progress task with no live session on startup", async () => {
 		const workspacePath = join(sandbox.path, "proj");
 		mkdirSync(workspacePath, { recursive: true });

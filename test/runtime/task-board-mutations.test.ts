@@ -62,6 +62,51 @@ describe("deleteTasksFromBoard", () => {
 	});
 });
 
+describe("trashTaskAndGetReadyLinkedTaskIds completion routing", () => {
+	// Producer in `in_progress` with a backlog waiter linked to run after it.
+	function linkedInProgressBoard(): RuntimeBoardData {
+		const createA = addTaskToColumn(
+			createBoard(),
+			"backlog",
+			{ prompt: "Producer", baseRef: "main" },
+			() => "aaaaa111",
+		);
+		const createB = addTaskToColumn(
+			createA.board,
+			"backlog",
+			{ prompt: "Waiter", baseRef: "main" },
+			() => "bbbbb111",
+		);
+		const movedA = moveTaskToColumn(createB.board, "aaaaa", "in_progress");
+		const linked = addTaskDependency(movedA.board, "aaaaa", "bbbbb");
+		if (!linked.added) {
+			throw new Error("Expected dependency to be created.");
+		}
+		return linked.board;
+	}
+
+	it("treats trashing straight from in_progress as a cancel (no linked waiter unlocked)", () => {
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(linkedInProgressBoard(), "aaaaa");
+		expect(trashed.moved).toBe(true);
+		expect(trashed.readyTaskIds).toEqual([]);
+	});
+
+	it("unlocks the linked backlog waiter when an in_progress task completes via review", () => {
+		// Mirrors what `kanban task done` does for a still-live task: route it
+		// through review (in_progress -> review) before moving to Done, so the
+		// review-only completion path unlocks the waiter without special-casing.
+		const board = linkedInProgressBoard();
+		const toReview = moveTaskToColumn(board, "aaaaa", "review");
+		expect(toReview.moved).toBe(true);
+		// The link must survive the in_progress -> review transition.
+		expect(toReview.board.dependencies).toHaveLength(1);
+
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(toReview.board, "aaaaa");
+		expect(trashed.moved).toBe(true);
+		expect(trashed.readyTaskIds).toEqual(["bbbbb"]);
+	});
+});
+
 describe("updateTaskDependencyHandoff", () => {
 	function createLinkedBoard(): { board: RuntimeBoardData; dependencyId: string } {
 		const createA = addTaskToColumn(

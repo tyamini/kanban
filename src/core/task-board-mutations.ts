@@ -243,6 +243,11 @@ function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 	taskId: string,
 	fromColumnId: RuntimeBoardColumnId | null,
 ): string[] {
+	// A task unlocks its linked backlog waiters only when it *completes*: it reaches
+	// review and is then moved to Done. Trashing a task from any other column
+	// (e.g. an in-progress card dragged to Done) is treated as a cancel and does NOT
+	// fire links. Callers that complete a still-live task (the `kanban task done`
+	// CLI used by the kanban-task-done skill) must first route it through review.
 	if (!taskId || board.dependencies.length === 0 || fromColumnId !== "review") {
 		return [];
 	}
