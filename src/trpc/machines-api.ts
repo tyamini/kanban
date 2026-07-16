@@ -6,6 +6,7 @@ import type {
 	RuntimeMachineActionResponse,
 	RuntimeMachineAddResponse,
 	RuntimeMachineConnectionInput,
+	RuntimeMachineConnectRequest,
 	RuntimeMachineDirectoryListRequest,
 	RuntimeMachineIdRequest,
 	RuntimeMachineListResponse,
@@ -20,7 +21,7 @@ export interface MachinesApi {
 	list: () => Promise<RuntimeMachineListResponse>;
 	add: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineAddResponse>;
 	testConnection: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineTestConnectionResponse>;
-	connect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
+	connect: (input: RuntimeMachineConnectRequest) => Promise<RuntimeMachineActionResponse>;
 	disconnect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
 	remove: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineRemoveResponse>;
 	listDirectoryContents: (input: RuntimeMachineDirectoryListRequest) => Promise<RuntimeDirectoryListResponse>;
@@ -47,7 +48,10 @@ export function createMachinesApi(deps: CreateMachinesApiDependencies): Machines
 		},
 		testConnection: async (input) => machineManager.testConnection(input),
 		connect: async (input) => {
-			const result = await machineManager.connectMachine(input.machineId);
+			const result = await machineManager.connectMachine(input.machineId, {
+				password: input.password,
+				passphrase: input.passphrase,
+			});
 			broadcastProjects();
 			return { ok: !result.error, machine: result.machine, error: result.error };
 		},

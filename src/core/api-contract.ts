@@ -672,6 +672,18 @@ export const runtimeMachineIdRequestSchema = z.object({
 });
 export type RuntimeMachineIdRequest = z.infer<typeof runtimeMachineIdRequestSchema>;
 
+/**
+ * Connect request for an already-stored machine. Secrets are never persisted, so
+ * after a hub restart a password-auth machine holds no in-memory secret; the UI
+ * re-supplies it here so reconnecting does not require removing + re-adding.
+ */
+export const runtimeMachineConnectRequestSchema = z.object({
+	machineId: z.string(),
+	password: z.string().optional(),
+	passphrase: z.string().optional(),
+});
+export type RuntimeMachineConnectRequest = z.infer<typeof runtimeMachineConnectRequestSchema>;
+
 export const runtimeMachineActionResponseSchema = z.object({
 	ok: z.boolean(),
 	machine: runtimeMachineSummarySchema.nullable(),

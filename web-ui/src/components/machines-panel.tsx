@@ -65,10 +65,10 @@ export function MachinesPanel(): ReactElement {
 	const [busyMachineId, setBusyMachineId] = useState<string | null>(null);
 
 	const handleConnect = useCallback(
-		async (machineId: string) => {
+		async (machineId: string, secret?: { password?: string; passphrase?: string }) => {
 			setBusyMachineId(machineId);
 			try {
-				const result = await connectMachine(machineId);
+				const result = await connectMachine(machineId, secret);
 				if (!result.ok) {
 					showAppToast({
 						intent: "danger",
@@ -125,7 +125,7 @@ export function MachinesPanel(): ReactElement {
 					key={machine.id}
 					machine={machine}
 					isBusy={busyMachineId === machine.id}
-					onConnect={() => void handleConnect(machine.id)}
+					onConnect={(secret) => void handleConnect(machine.id, secret)}
 					onDisconnect={() => void handleDisconnect(machine.id)}
 					onRemove={() => void handleRemove(machine.id)}
 				/>
@@ -614,12 +614,43 @@ function RemoteMachineRow({
 }: {
 	machine: RuntimeMachineSummary;
 	isBusy: boolean;
-	onConnect: () => void;
+	onConnect: (secret?: { password?: string }) => void;
 	onDisconnect: () => void;
 	onRemove: () => void;
 }): ReactElement {
 	const isConnected = machine.connectionStatus === "connected";
 	const isTransitioning = machine.connectionStatus === "connecting" || machine.connectionStatus === "bootstrapping";
+	// Secrets are never persisted, so after a hub restart a password-auth machine
+	// holds no in-memory password. Re-prompt for it inline instead of failing with
+	// "Password is required for password authentication".
+	const needsPassword = machine.authMethod === "password" && !machine.hasStoredSecret;
+	const [isPrompting, setIsPrompting] = useState(false);
+	const [passwordDraft, setPasswordDraft] = useState("");
+	const passwordInputRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (isPrompting) {
+			passwordInputRef.current?.focus();
+		}
+	}, [isPrompting]);
+
+	const submitPassword = useCallback(() => {
+		if (!passwordDraft) {
+			return;
+		}
+		onConnect({ password: passwordDraft });
+		setPasswordDraft("");
+		setIsPrompting(false);
+	}, [onConnect, passwordDraft]);
+
+	const handleConnectClick = useCallback(() => {
+		if (needsPassword) {
+			setIsPrompting(true);
+			return;
+		}
+		onConnect();
+	}, [needsPassword, onConnect]);
+
 	return (
 		<div className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 py-2">
 			<div className="flex items-center justify-between">
@@ -651,31 +682,63 @@ function RemoteMachineRow({
 				</pre>
 			) : null}
 
-			<div className="flex items-center gap-1.5">
-				{isConnected ? (
-					<Button variant="default" size="sm" onClick={onDisconnect} disabled={isBusy}>
-						Disconnect
-					</Button>
-				) : (
+			{isPrompting && !isConnected ? (
+				<div className="flex items-center gap-1.5">
+					<input
+						ref={passwordInputRef}
+						type="password"
+						value={passwordDraft}
+						onChange={(event) => setPasswordDraft(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Enter") {
+								submitPassword();
+							} else if (event.key === "Escape") {
+								setPasswordDraft("");
+								setIsPrompting(false);
+							}
+						}}
+						placeholder="Password"
+						className={cn(inputClass, "flex-1")}
+						disabled={isBusy}
+						autoComplete="off"
+					/>
 					<Button
 						variant="primary"
 						size="sm"
-						onClick={onConnect}
-						disabled={isBusy || isTransitioning}
-						icon={isBusy || isTransitioning ? <Spinner size={12} /> : undefined}
+						onClick={submitPassword}
+						disabled={isBusy || !passwordDraft}
+						icon={isBusy ? <Spinner size={12} /> : <Check size={13} />}
 					>
 						Connect
 					</Button>
-				)}
-				<Button
-					variant="ghost"
-					size="sm"
-					icon={<Trash2 size={13} />}
-					onClick={onRemove}
-					disabled={isBusy}
-					aria-label={`Remove ${machine.name}`}
-				/>
-			</div>
+				</div>
+			) : (
+				<div className="flex items-center gap-1.5">
+					{isConnected ? (
+						<Button variant="default" size="sm" onClick={onDisconnect} disabled={isBusy}>
+							Disconnect
+						</Button>
+					) : (
+						<Button
+							variant="primary"
+							size="sm"
+							onClick={handleConnectClick}
+							disabled={isBusy || isTransitioning}
+							icon={isBusy || isTransitioning ? <Spinner size={12} /> : undefined}
+						>
+							Connect
+						</Button>
+					)}
+					<Button
+						variant="ghost"
+						size="sm"
+						icon={<Trash2 size={13} />}
+						onClick={onRemove}
+						disabled={isBusy}
+						aria-label={`Remove ${machine.name}`}
+					/>
+				</div>
+			)}
 		</div>
 	);
 }

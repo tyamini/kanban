@@ -63,6 +63,7 @@ import type {
 	RuntimeMachineActionResponse,
 	RuntimeMachineAddResponse,
 	RuntimeMachineConnectionInput,
+	RuntimeMachineConnectRequest,
 	RuntimeMachineDirectoryListRequest,
 	RuntimeMachineIdRequest,
 	RuntimeMachineListResponse,
@@ -175,6 +176,7 @@ import {
 	runtimeMachineActionResponseSchema,
 	runtimeMachineAddResponseSchema,
 	runtimeMachineConnectionInputSchema,
+	runtimeMachineConnectRequestSchema,
 	runtimeMachineDirectoryListRequestSchema,
 	runtimeMachineIdRequestSchema,
 	runtimeMachineListResponseSchema,
@@ -423,7 +425,7 @@ export interface RuntimeTrpcContext {
 		list: () => Promise<RuntimeMachineListResponse>;
 		add: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineAddResponse>;
 		testConnection: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineTestConnectionResponse>;
-		connect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
+		connect: (input: RuntimeMachineConnectRequest) => Promise<RuntimeMachineActionResponse>;
 		disconnect: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineActionResponse>;
 		remove: (input: RuntimeMachineIdRequest) => Promise<RuntimeMachineRemoveResponse>;
 		listDirectoryContents: (input: RuntimeMachineDirectoryListRequest) => Promise<RuntimeDirectoryListResponse>;
@@ -828,7 +830,7 @@ export const runtimeAppRouter = t.router({
 				return await ctx.machinesApi.testConnection(input);
 			}),
 		connect: t.procedure
-			.input(runtimeMachineIdRequestSchema)
+			.input(runtimeMachineConnectRequestSchema)
 			.output(runtimeMachineActionResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.machinesApi.connect(input);

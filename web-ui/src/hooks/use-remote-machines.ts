@@ -21,7 +21,10 @@ export function useRemoteMachines(): {
 	refresh: () => Promise<void>;
 	testConnection: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineTestConnectionResponse>;
 	addMachine: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineAddResponse>;
-	connectMachine: (machineId: string) => Promise<RuntimeMachineActionResponse>;
+	connectMachine: (
+		machineId: string,
+		secret?: { password?: string; passphrase?: string },
+	) => Promise<RuntimeMachineActionResponse>;
 	disconnectMachine: (machineId: string) => Promise<RuntimeMachineActionResponse>;
 	removeMachine: (machineId: string) => Promise<{ ok: boolean; error?: string }>;
 	listDirectory: (machineId: string, path: string | undefined) => Promise<RuntimeDirectoryListResponse>;
@@ -86,8 +89,12 @@ export function useRemoteMachines(): {
 			[client, refresh],
 		),
 		connectMachine: useCallback(
-			async (machineId) => {
-				const result = await client.machines.connect.mutate({ machineId });
+			async (machineId, secret) => {
+				const result = await client.machines.connect.mutate({
+					machineId,
+					password: secret?.password,
+					passphrase: secret?.passphrase,
+				});
 				await refresh();
 				return result;
 			},

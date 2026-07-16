@@ -61,7 +61,10 @@ export interface RemoteMachineManager {
 		input: RuntimeMachineConnectionInput,
 	) => Promise<{ machine: RuntimeMachineSummary | null; error?: string }>;
 	testConnection: (input: RuntimeMachineConnectionInput) => Promise<RuntimeMachineTestConnectionResponse>;
-	connectMachine: (machineId: string) => Promise<{ machine: RuntimeMachineSummary | null; error?: string }>;
+	connectMachine: (
+		machineId: string,
+		secret?: { password?: string; passphrase?: string } | null,
+	) => Promise<{ machine: RuntimeMachineSummary | null; error?: string }>;
 	disconnectMachine: (machineId: string) => Promise<{ machine: RuntimeMachineSummary | null; error?: string }>;
 	removeMachine: (machineId: string) => Promise<{ ok: boolean; error?: string }>;
 
@@ -266,10 +269,17 @@ export function createRemoteMachineManager(
 
 	const connectMachine = async (
 		machineId: string,
+		secret?: MachineSecret | null,
 	): Promise<{ machine: RuntimeMachineSummary | null; error?: string }> => {
 		const state = machineStates.get(machineId);
 		if (!state) {
 			return { machine: null, error: `Unknown machine: ${machineId}` };
+		}
+		// A caller-supplied secret (e.g. the user re-entering a password after a hub
+		// restart wiped the in-memory copy) takes over so the machine can reconnect
+		// without being removed and re-added.
+		if (secret && (secret.password || secret.passphrase)) {
+			state.secret = { password: secret.password, passphrase: secret.passphrase };
 		}
 		if (state.connectPromise) {
 			await state.connectPromise.catch(() => {});
