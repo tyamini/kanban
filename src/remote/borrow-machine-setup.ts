@@ -30,6 +30,16 @@ export interface BorrowSshConfig {
 
 // Local artifacts to replicate on the borrowed machine (all under $HOME).
 const AI_PRIVATE_REL = ".drivenets/cheetah/AI/v2/private";
+// The cheetah dev-context profile to establish on a freshly-borrowed machine.
+// `set-context.sh <profile>` links the profile's skills AND every private skill
+// (e.g. pr-watchdog) into ~/cheetah/.claude/skills, and writes the state files
+// (active_profile.txt / managed_files.txt) that `ai-pull` later re-applies.
+// Without an initial profile there is nothing for `ai-pull` to re-apply, so the
+// private skills never get linked on the machine. Overridable per borrow.
+const DEV_CONTEXT_PROFILE = process.env.KANBAN_BORROW_DEV_PROFILE?.trim() || "routing";
+// The cheetah checkout (provisioned by the borrow pipeline) that owns the
+// set-context tooling and profile definitions.
+const SET_CONTEXT_SCRIPT_REL = "cheetah/.ai/skills/common/set-dev-context/scripts/set-context.sh";
 const BASHRC_FILES = [".bashrc", "recovered_bashrc"];
 // Directories the bashrc files depend on (e.g. the git-aware-prompt sourced via
 // $GITAWAREPROMPT in recovered_bashrc).
@@ -315,6 +325,35 @@ async function runAiPull(connection: SshConnection, report: SetupProgressReporte
 	});
 }
 
+/**
+ * Establish the cheetah dev context so the profile's skills and all private
+ * skills (pr-watchdog etc.) are linked into ~/cheetah/.claude/skills. This also
+ * seeds ~/.drivenets/cheetah/AI/v2/state/active_profile.txt, which `ai-pull`
+ * needs before it will re-apply the context on later pulls. Best-effort: skipped
+ * cleanly if the cheetah checkout / set-context tooling isn't present.
+ */
+async function setDevContext(
+	connection: SshConnection,
+	remoteHome: string,
+	report: SetupProgressReporter,
+): Promise<void> {
+	await runStep(report, `Setting cheetah dev context (${DEV_CONTEXT_PROFILE})`, async () => {
+		const script = `${remoteHome}/${SET_CONTEXT_SCRIPT_REL}`;
+		const check = await connection.exec(`bash -lc 'test -f "${script}" && echo yes || true'`);
+		if (check.stdout.trim() !== "yes") {
+			throw new Error(`set-context.sh not found at ${script} (cheetah checkout missing?)`);
+		}
+		const result = await connection.exec(`bash -lc '"${script}" ${DEV_CONTEXT_PROFILE}'`);
+		const tail = (result.stdout || result.stderr).trim().split("\n").slice(-3).join("\n");
+		if (tail) {
+			report(tail);
+		}
+		if (result.code !== 0) {
+			throw new Error(result.stderr.trim().split("\n").slice(-3).join("\n") || `exit ${result.code}`);
+		}
+	});
+}
+
 async function installGh(connection: SshConnection, remoteHome: string, report: SetupProgressReporter): Promise<void> {
 	await runStep(report, "Installing GitHub CLI", async () => {
 		const scriptPath = join(tmpdir(), `gh-install-${process.pid}-${Date.now()}.sh`);
@@ -463,6 +502,7 @@ export async function provisionBorrowedMachine(
 		await ensureClaudeOnPath(connection, remoteHome, report);
 		await installGh(connection, remoteHome, report);
 		await copyAuthCredentials(connection, remoteHome, report);
+		await setDevContext(connection, remoteHome, report);
 		await runAiPull(connection, report);
 		report("Setup complete.");
 	} finally {
