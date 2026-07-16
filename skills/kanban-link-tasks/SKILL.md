@@ -15,7 +15,11 @@ autonomous pipeline.
 You are typically inside a task worktree, so target the main repo with `--project-path`.
 
 ```bash
-KANBAN="${KANBAN_CLI:-kanban}"
+# Kanban injects KANBAN_CLI as a ready-to-run command line. It may be a single
+# binary (`kanban`) or a multi-token command (e.g. `node /path/dist/cli.js`), so
+# it MUST be re-parsed by the shell — never used as one quoted "$KANBAN" word,
+# which fails with "No such file or directory". Wrap it in a function instead:
+kanban() { eval "${KANBAN_CLI:-command kanban} $(printf '%q ' "$@")"; }
 MAIN_REPO="$(git rev-parse --path-format=absolute --git-common-dir | sed 's#/\.git/*$##')"
 ```
 
@@ -26,7 +30,7 @@ Direction: `--task-id` is the task that **waits**; `--linked-task-id` is the
 
 ```bash
 # Run PREREQ first, then WAITER:
-"$KANBAN" task link --task-id <WAITER_ID> --linked-task-id <PREREQ_ID> --project-path "$MAIN_REPO"
+kanban task link --task-id <WAITER_ID> --linked-task-id <PREREQ_ID> --project-path "$MAIN_REPO"
 ```
 
 On the board the arrow points in execution order — from the prerequisite into the
@@ -37,11 +41,11 @@ waiting task (prerequisite → waiter).
 Typical pattern: create the tasks first, then link each dependency edge.
 
 ```bash
-A="$("$KANBAN" task create --prompt "Step A" --auto-review-enabled true --auto-review-mode commit --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
-B="$("$KANBAN" task create --prompt "Step B (after A)" --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
+A="$(kanban task create --prompt "Step A" --auto-review-enabled true --auto-review-mode commit --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
+B="$(kanban task create --prompt "Step B (after A)" --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
 
 # B waits on A → A runs first, then B:
-"$KANBAN" task link --task-id "$B" --linked-task-id "$A" --project-path "$MAIN_REPO"
+kanban task link --task-id "$B" --linked-task-id "$A" --project-path "$MAIN_REPO"
 ```
 
 With auto-review enabled on A, when A finishes it auto-commits, moves to Done, and

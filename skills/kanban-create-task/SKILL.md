@@ -20,9 +20,12 @@ You are typically running inside a Kanban **task worktree** (a path under
 the worktree, so pass `--project-path`.
 
 ```bash
-# The Kanban CLI. Kanban injects KANBAN_CLI for tasks it spawns; otherwise fall
-# back to the global binary (or `npx -y kanban`).
-KANBAN="${KANBAN_CLI:-kanban}"
+# Kanban injects KANBAN_CLI as a ready-to-run command line for tasks it spawns.
+# It may be a single binary (`kanban`) or a multi-token command (e.g.
+# `node /path/dist/cli.js`), so it MUST be re-parsed by the shell — never used as
+# one quoted "$KANBAN" word, which fails with "No such file or directory". Wrap it
+# in a function instead (falls back to the global binary if not injected):
+kanban() { eval "${KANBAN_CLI:-command kanban} $(printf '%q ' "$@")"; }
 
 # The main project repo (works whether or not you are in a worktree):
 MAIN_REPO="$(git rev-parse --path-format=absolute --git-common-dir | sed 's#/\.git/*$##')"
@@ -31,7 +34,7 @@ MAIN_REPO="$(git rev-parse --path-format=absolute --git-common-dir | sed 's#/\.g
 ## Create the task
 
 ```bash
-"$KANBAN" task create --prompt "Write unit tests for the auth module" --project-path "$MAIN_REPO"
+kanban task create --prompt "Write unit tests for the auth module" --project-path "$MAIN_REPO"
 ```
 
 Common options (all optional except `--prompt`):
@@ -46,7 +49,7 @@ The command prints JSON including the new task's `id` (needed to link tasks).
 Capture it, e.g.:
 
 ```bash
-TASK_ID="$("$KANBAN" task create --prompt "…" --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
+TASK_ID="$(kanban task create --prompt "…" --project-path "$MAIN_REPO" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n1)"
 ```
 
 ## Notes
