@@ -75,6 +75,24 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 					} satisfies RuntimeHookIngestResponse;
 				}
 
+				// For `to_review`, attach hook metadata BEFORE the state transition.
+				// Transitioning to `awaiting_review` makes the task eligible for
+				// auto-review and synchronously notifies the orchestrator, which
+				// enqueues a reconcile. The metadata carries the "awaiting user
+				// response" signal (e.g. an end-of-turn question in `finalMessage`). If
+				// it were applied *after* the transition, that reconcile could race in
+				// between — during the awaited checkpoint capture below — see a
+				// review-eligible task with no pending-question signal, and
+				// auto-complete a task that is actually waiting on the user. The
+				// `awaiting_review` transition preserves `latestHookActivity`, so
+				// metadata set here survives it. (For `to_in_progress` the metadata is
+				// applied after the transition: `transitionToRunning` intentionally
+				// clears stale attention markers, and applying before it would emit a
+				// summary while still in `awaiting_review` with those stale markers.)
+				if (event === "to_review" && body.metadata) {
+					manager.applyHookActivity(taskId, body.metadata);
+				}
+
 				const transitionedSummary =
 					event === "to_review" ? manager.transitionToReview(taskId, "hook") : manager.transitionToRunning(taskId);
 				if (!transitionedSummary) {
@@ -108,7 +126,7 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 					}
 				}
 
-				if (body.metadata) {
+				if (event !== "to_review" && body.metadata) {
 					manager.applyHookActivity(taskId, body.metadata);
 				}
 

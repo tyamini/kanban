@@ -288,7 +288,7 @@ export function inferHookSourceFromPayload(payload: Record<string, unknown> | nu
 	return null;
 }
 
-function normalizeHookMetadata(
+export function normalizeHookMetadata(
 	event: RuntimeHookEvent,
 	payload: Record<string, unknown> | null,
 	flagMetadata: Partial<RuntimeTaskHookActivity>,
@@ -328,13 +328,20 @@ function normalizeHookMetadata(
 			readNestedString(payload, ["event", "type"]) ??
 			readNestedString(payload, ["notification", "event"]))
 		: null;
-	const finalMessage = payload
-		? (readStringField(payload, "last_assistant_message") ??
-			readStringField(payload, "lastAssistantMessage") ??
-			readStringField(payload, "last-assistant-message") ??
-			readNestedString(payload, ["taskComplete", "taskMetadata", "result"]) ??
-			readNestedString(payload, ["taskComplete", "result"]))
-		: null;
+	// `finalMessage` is the agent's end-of-turn message and is only meaningful
+	// for `to_review` (turn end). Deriving it from the payload for mid-turn
+	// `activity` events (PreToolUse / Notification / SubagentStop) is wrong: it
+	// can clobber the real turn-end message — e.g. an unanswered question — with
+	// unrelated/partial text, which makes auto-review believe the task is no
+	// longer awaiting the user and auto-complete it behind their back.
+	const finalMessage =
+		event === "to_review" && payload
+			? (readStringField(payload, "last_assistant_message") ??
+				readStringField(payload, "lastAssistantMessage") ??
+				readStringField(payload, "last-assistant-message") ??
+				readNestedString(payload, ["taskComplete", "taskMetadata", "result"]) ??
+				readNestedString(payload, ["taskComplete", "result"]))
+			: null;
 
 	const activityText = inferActivityText(event, payload, toolName, finalMessage, notificationType);
 	const merged: Partial<RuntimeTaskHookActivity> = {

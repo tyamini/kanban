@@ -84,6 +84,55 @@ describe("createHooksApi", () => {
 		});
 	});
 
+	it("applies to_review metadata before the review transition to avoid an auto-review race", async () => {
+		const callOrder: string[] = [];
+		const transitionedSummary = createSummary({ state: "awaiting_review", reviewReason: "hook" });
+		const manager = {
+			getSummary: vi.fn(() => createSummary({ state: "running" })),
+			transitionToReview: vi.fn(() => {
+				callOrder.push("transitionToReview");
+				return transitionedSummary;
+			}),
+			transitionToRunning: vi.fn(),
+			applyHookActivity: vi.fn(() => {
+				callOrder.push("applyHookActivity");
+				return null;
+			}),
+			applyTurnCheckpoint: vi.fn(),
+		} as unknown as TerminalSessionManager;
+
+		const api = createHooksApi({
+			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
+			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+			broadcastTaskReadyForReview: vi.fn(),
+			captureTaskTurnCheckpoint: vi.fn(async () => ({
+				turn: 1,
+				ref: "refs/kanban/checkpoints/task-1/turn/1",
+				commit: "1111111",
+				createdAt: Date.now(),
+			})),
+			deleteTaskTurnCheckpointRef: vi.fn(async () => undefined),
+		});
+
+		const response = await api.ingest({
+			taskId: "task-1",
+			workspaceId: "workspace-1",
+			event: "to_review",
+			metadata: {
+				source: "claude",
+				finalMessage: "Should the color.txt file contain red or blue?",
+			},
+		});
+
+		expect(response).toEqual({ ok: true });
+		expect(manager.applyHookActivity).toHaveBeenCalledWith("task-1", {
+			source: "claude",
+			finalMessage: "Should the color.txt file contain red or blue?",
+		});
+		expect(callOrder).toEqual(["applyHookActivity", "transitionToReview"]);
+	});
+
 	it("captures a turn checkpoint when transitioning to review", async () => {
 		const transitionedSummary = createSummary({
 			state: "awaiting_review",

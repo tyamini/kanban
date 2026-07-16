@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveDroidFinalMessageFromTranscriptText } from "../../src/commands/hook-events/droid-hook-events";
-import { inferHookSourceFromPayload } from "../../src/commands/hooks";
+import { inferHookSourceFromPayload, normalizeHookMetadata } from "../../src/commands/hooks";
 
 describe("inferHookSourceFromPayload", () => {
 	it("infers claude from unix transcript path", () => {
@@ -67,6 +67,29 @@ describe("inferHookSourceFromPayload", () => {
 				transcript_path: "C:\\Users\\dev\\logs\\session.jsonl",
 			}),
 		).toBeNull();
+	});
+});
+
+describe("normalizeHookMetadata finalMessage capture", () => {
+	it("captures last_assistant_message as finalMessage for to_review", () => {
+		const metadata = normalizeHookMetadata(
+			"to_review",
+			{ last_assistant_message: "What color should it be — red or blue?" },
+			{ source: "claude" },
+		);
+		expect(metadata?.finalMessage).toBe("What color should it be — red or blue?");
+	});
+
+	it("does not derive finalMessage from the payload for mid-turn activity events", () => {
+		// An activity event must not clobber the turn-end question; otherwise
+		// auto-review sees no pending question and auto-completes the task.
+		const metadata = normalizeHookMetadata("activity", { last_assistant_message: "red" }, { source: "claude" });
+		expect(metadata?.finalMessage ?? null).toBeNull();
+	});
+
+	it("does not derive finalMessage from the payload for to_in_progress events", () => {
+		const metadata = normalizeHookMetadata("to_in_progress", { last_assistant_message: "red" }, { source: "claude" });
+		expect(metadata?.finalMessage ?? null).toBeNull();
 	});
 });
 
